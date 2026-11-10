@@ -21,7 +21,7 @@ The existing host CLI reported file-based API authentication. This proves reuse 
 - The refresh probe tested persistent writes with synthetic credentials. No real token was forced to expire; real refresh and concurrent refresh races are not verified.
 - Live parallel model requests were not run. Parallel worktree/session behavior was checked with the fixture CLI only.
 - ChatGPT subscription login, Keychain, Windows, Linux native execution, other agents, interactive sessions, and different Codex CLI versions were not tested. Unsupported systems fail instead of falling back to no sandbox.
-- The macOS 14 / Node 22 and Node 24 CI matrix is configured separately; its actual run result is recorded in GitHub Actions, not implied by this local record.
+- GitHub rejected the initial macOS 14 runner before executing any steps (`macos-14-arm64-us-default` is not supported). CI now uses `macos-latest` with Node 22/24, matching upstream's runner policy; macOS 14 remains the minimum requirement but was not executed in this CI run. Actual run results are recorded in GitHub Actions.
 - Task correctness, project tests, and review remain responsibilities of the caller.
 
 Reproduce with `npm ci && npm run check`. Run `npm run test:live` only when a real model request using the current account is intended.
