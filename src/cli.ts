@@ -5,17 +5,19 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { run } from "@ai-hero/sandcastle";
 import type { CodexOptions } from "@ai-hero/sandcastle";
-import { assertLocalRunEnvironment, codexOnSeatbelt } from "./index.js";
+import { assertLocalRunEnvironment, codexOnSeatbelt, verifyCodexAuth } from "./index.js";
 
 const help = `sandcastle-local — macOS Seatbelt + 宿主 Codex CLI 登录
 
 用法:
-  sandcastle-local doctor [--codex-home PATH] [--model MODEL]
+  sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
   sandcastle-local run --branch BRANCH (--prompt TEXT | --prompt-file PATH)
     [--cwd PATH] [--model MODEL] [--effort high] [--codex-home PATH]
 
 运行结果留在指定分支，不自动合并。模型默认读取宿主 config.toml。
 复用整个 Codex 目录的读写权限，包括配置、登录和会话。
+doctor 默认在 Seatbelt 内发送一个最小模型请求验证授权，会消耗少量额度。
+--offline 仅检查本地配置，不验证授权有效性。
 `;
 
 function effortOf(value: string | undefined): CodexOptions["effort"] {
@@ -30,6 +32,7 @@ async function main() {
     allowPositionals: true,
     options: {
       help: { type: "boolean", short: "h" },
+      offline: { type: "boolean" },
       cwd: { type: "string" },
       model: { type: "string" },
       effort: { type: "string" },
@@ -47,6 +50,7 @@ async function main() {
   if (positionals.length !== 1 || (command !== "doctor" && command !== "run")) {
     throw new Error("仅支持 doctor 和 run。使用 --help 查看用法。");
   }
+  if (command === "run" && values.offline) throw new Error("--offline 仅适用于 doctor。");
   const cwd = resolve(values.cwd ?? process.cwd());
   const effort = effortOf(values.effort);
   if (command === "run") {
@@ -69,10 +73,15 @@ async function main() {
     throw new Error("宿主 PATH 中没有可运行的 codex CLI。请先安装并登录。");
   }
   if (command === "doctor") {
+    if (!values.offline) process.stderr.write("正在 Seatbelt 内使用当前登录验证模型请求…\n");
+    const auth = values.offline
+      ? { status: "not_verified", message: "仅检查了本地文件，未验证授权有效性。" }
+      : await verifyCodexAuth(adapted, shutdown.signal);
     process.stdout.write(JSON.stringify({
       platform: "macOS", sandbox: "Seatbelt", codexHome: adapted.codexHome,
-      model: adapted.model, auth: "文件登录可读（未向模型发送请求）", sessions: "捕获已配置",
+      model: adapted.model, auth, sessions: "捕获已配置",
     }, null, 2) + "\n");
+    if (auth.status === "failed") process.exitCode = 1;
     return;
   }
   const prompt = values["prompt-file"] === undefined ? values.prompt

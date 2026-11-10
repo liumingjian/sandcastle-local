@@ -28,7 +28,11 @@ npm ci
 node dist/cli.js doctor
 ```
 
-`doctor` 检查系统沙箱可用性、CLI、文件登录和模型配置；成功时输出 JSON。它不向模型发送请求，也不证明登录尚未过期。
+`doctor` 检查系统沙箱、CLI、文件登录和模型配置，并默认在临时 Git 项目中通过 Seatbelt 发起一个最小模型请求验证当前授权。它会消耗少量当前账户额度，最长等待约两分钟；不会向模型发送业务项目内容。
+
+只有收到随机验证标记才输出 `auth.status: "verified"`。在线验证失败时返回非零退出码，`auth.code` 区分认证拒绝、访问权限、限流/额度、模型不可用、网络错误、超时和响应异常；不会直接打印原始服务端错误。通过验证表示当前配置的登录、模型和连接在本次请求中可用，不保证后续请求不会过期或限流。
+
+仅检查本地配置、不发送请求时，运行 `node dist/cli.js doctor --offline`，此时明确输出 `auth.status: "not_verified"`。
 
 接着指定你自己的目标项目，先跑一个不改文件的任务：
 
@@ -46,7 +50,7 @@ node dist/cli.js run \
 ### 命令选项
 
 ```text
-sandcastle-local doctor [--codex-home PATH] [--model MODEL]
+sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
 sandcastle-local run --branch BRANCH (--prompt TEXT | --prompt-file PATH)
   [--cwd PATH] [--model MODEL] [--effort high] [--codex-home PATH]
 ```

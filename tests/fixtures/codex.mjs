@@ -20,6 +20,18 @@ if (JSON.parse(readFileSync(join(root, "auth.json"), "utf8")).fixture !== true) 
 }
 const args = process.argv.slice(2);
 const verb = args[1];
+const model = args[args.indexOf("-m") + 1];
+const failures = new Map([
+  ["fixture-unauthorized", "401 Unauthorized: fixture-secret-must-not-appear"],
+  ["fixture-forbidden", "403 Forbidden"],
+  ["fixture-rate-limited", "429 quota exceeded"],
+  ["fixture-network", "ECONNREFUSED connection failed"],
+  ["fixture-model-unavailable", "model is not supported"],
+]);
+if (failures.has(model)) {
+  process.stdout.write(JSON.stringify({ type: "turn.failed", error: { message: failures.get(model) } }) + "\n");
+  process.exit(0);
+}
 const id = verb === "resume" ? args[2] : randomUUID();
 const sessions = join(root, "sessions", "2026", "11", "10");
 mkdirSync(sessions, { recursive: true });
@@ -32,5 +44,7 @@ if (input.includes("MAKE_COMMIT")) {
   git(["commit", "-m", "test: produce a sandbox commit"]);
 }
 process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: id }) + "\n");
-process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "fixture completed" } }) + "\n");
+const marker = input.match(/SANDCASTLE_AUTH_[a-f0-9-]+/u)?.[0];
+const reply = model === "fixture-wrong-response" ? "unexpected response" : marker ?? "fixture completed";
+process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: reply } }) + "\n");
 process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }) + "\n");

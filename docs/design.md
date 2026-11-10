@@ -21,6 +21,8 @@ Both session roots point at CODEX_HOME/sessions. A named worktree remains separa
 
 `src/cli.ts` provides doctor and one-shot run commands, rejects conflicting project credential variables, resolves prompt files against the target repository, and forwards cancellation. It never changes the host login configuration.
 
+On 2026-11-10 the user requested concrete auth validation in doctor. This supersedes its original offline-only behavior: doctor now sends a minimal request using the same Seatbelt/provider configuration in a disposable Git repository, and requires a random response marker before reporting verified. It has a two-minute request timeout, supports cancellation, returns categorized failures without raw upstream messages, and leaves the caller's repository untouched. `--offline` explicitly retains local checks with status not_verified. `src/auth.ts` uses the upstream warm-sandbox API so doctor stdout remains JSON. Probe sessions may remain in the existing CODEX_HOME, as with other CLI requests.
+
 ## Compatibility baseline
 
 - npm release: `@ai-hero/sandcastle@0.14.0`, checked 2026-11-10 and pinned exactly.

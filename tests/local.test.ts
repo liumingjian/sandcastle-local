@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import { createSandbox, run } from "@ai-hero/sandcastle";
-import { assertLocalRunEnvironment, codexOnSeatbelt, resolveLocalCodex } from "../src/index.js";
+import { assertLocalRunEnvironment, codexOnSeatbelt, resolveLocalCodex, verifyCodexAuth } from "../src/index.js";
 
 test("CLI validates required branch and mutually exclusive prompts before starting an agent", () => {
   const cli = new URL("../src/cli.ts", import.meta.url);
@@ -73,6 +73,59 @@ test("project env cannot override host login", async t => {
   await assertLocalRunEnvironment(f.repo);
   await writeFile(path, "CODEX_API_KEY=\n");
   await assert.rejects(assertLocalRunEnvironment(f.repo), /移除/u);
+});
+
+test("doctor verifies a sandboxed request, reports auth rejection and supports offline checks", { skip: process.platform !== "darwin", timeout: 60_000 }, async t => {
+  const f = await fixture(t);
+  const bin = join(f.root, "bin");
+  await mkdir(bin);
+  const executable = join(bin, "codex");
+  await copyFile(new URL("./fixtures/codex.mjs", import.meta.url), executable);
+  await chmod(executable, 0o755);
+  const cli = new URL("../src/cli.ts", import.meta.url);
+  const invoke = (args: string[]) => {
+    try {
+      const stdout = execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname, "doctor", "--codex-home", f.codexHome, ...args], {
+        cwd: f.repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      return { status: 0, stdout };
+    } catch (error) {
+      if (error instanceof Error && "status" in error && "stdout" in error && typeof error.stdout === "string") {
+        return { status: error.status, stdout: error.stdout };
+      }
+      throw error;
+    }
+  };
+  const verified = invoke([]);
+  assert.equal(verified.status, 0);
+  assert.equal(JSON.parse(verified.stdout).auth.status, "verified");
+  const denied = invoke(["--model", "fixture-unauthorized"]);
+  assert.equal(denied.status, 1);
+  assert.equal(JSON.parse(denied.stdout).auth.code, "authentication_failed");
+  assert(!denied.stdout.includes("fixture-secret-must-not-appear"));
+  for (const [model, code] of [
+    ["fixture-forbidden", "access_denied"],
+    ["fixture-rate-limited", "rate_limited"],
+    ["fixture-network", "network_error"],
+    ["fixture-model-unavailable", "model_unavailable"],
+  ]) {
+    assert(model);
+    const failure = invoke(["--model", model]);
+    assert.equal(failure.status, 1);
+    assert.equal(JSON.parse(failure.stdout).auth.code, code);
+  }
+  const wrongResponse = invoke(["--model", "fixture-wrong-response"]);
+  assert.equal(wrongResponse.status, 1);
+  assert.equal(JSON.parse(wrongResponse.stdout).auth.code, "invalid_response");
+  const offline = invoke(["--offline", "--model", "fixture-unauthorized"]);
+  assert.equal(offline.status, 0);
+  assert.equal(JSON.parse(offline.stdout).auth.status, "not_verified");
+  const adapter = await codexOnSeatbelt({ codexHome: f.codexHome });
+  const cancelled = await verifyCodexAuth(adapter, AbortSignal.abort());
+  assert.equal(cancelled.status, "failed");
+  if (cancelled.status === "failed") assert.equal(cancelled.code, "timeout");
+  assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: f.repo, encoding: "utf8" }), "");
 });
 
 test("real Seatbelt reuses login, persists refresh writes and denies unrelated home files", { skip: process.platform !== "darwin" }, async t => {

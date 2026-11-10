@@ -7,6 +7,9 @@ import type { CodexOptions } from "@ai-hero/sandcastle";
 import { seatbelt } from "@ai-hero/sandcastle/sandboxes/seatbelt";
 import { parse } from "smol-toml";
 
+export { verifyCodexAuth } from "./auth.js";
+export type { AuthVerification } from "./auth.js";
+
 export interface LocalCodexOptions {
   readonly model?: string;
   readonly effort?: CodexOptions["effort"];

@@ -25,3 +25,11 @@ The existing host CLI reported file-based API authentication. This proves reuse 
 - Task correctness, project tests, and review remain responsibilities of the caller.
 
 Reproduce with `npm ci && npm run check`. Run `npm run test:live` only when a real model request using the current account is intended.
+
+## Doctor online verification update
+
+On 2026-11-10, doctor was changed from offline file checks to an actual sandboxed model request by default, at the user's request. Local type checks, tests, and declaration build passed: six tests passed and the unsupported-OS test was skipped on macOS.
+
+The doctor regression test uses a fixture CLI inside real Seatbelt and checks the CLI's JSON output and exit status for success, 401, 403, 429, network failure, unavailable model, and an unexpected response. It also checks that raw credential-related error text is not printed, `--offline` does not validate authorization, cancellation reports an unverified failure, and the caller's repository stays clean.
+
+The rebuilt `node dist/cli.js doctor` was also run against the real local CLI and existing file login. It returned `auth.status: verified` after the selected model answered the random challenge, taking approximately 17.6 seconds including sandbox setup and session handling. This verifies current request usability, not forced token refresh, subscription entitlements, or future requests. The probe used a disposable repository; its session remains under CODEX_HOME.
