@@ -1,5 +1,11 @@
 # Verification record
 
+## Fixture installation on fresh CI runners
+
+The first browser bridge commits passed locally but failed on a fresh macOS Node 24 runner: both installed-package tests stopped with ENOTCACHED while resolving @ai-hero/sandcastle. npm ci fills the tarball cache from the lockfile without necessarily caching registry package metadata; the fixture's separate npm install --offline therefore depended on locally warmed metadata.
+
+This was reproduced using an isolated cache populated only by npm ci --ignore-scripts from the project lockfile, then running the custom-entry regression with npm_config_cache pointing at that cache. The existing test failed with the same ENOTCACHED error. Fixture installation now uses --prefer-offline, reusing cached archives while permitting missing metadata to be fetched. This is a test-harness change; it does not alter consumer installation or browser behavior. Earlier offline-install observations below describe the original local cache state and do not establish operation on a fresh CI cache.
+
 ## Chromium under Seatbelt
 
 ### Migration and ignored-worktree repair
