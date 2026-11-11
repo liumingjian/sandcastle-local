@@ -7,6 +7,8 @@ import { test } from "node:test";
 import type { TestContext } from "node:test";
 import { codex, createSandbox, run } from "@ai-hero/sandcastle";
 import { codexOnSeatbelt, resolveLocalCodex, verifyCodexAuth } from "../src/index.js";
+import { browserPrelude, browserPrompt } from "../src/init.js";
+import { chromium } from "playwright-core";
 
 test("CLI exposes upstream-style initialization with fixed local providers and matching version", () => {
   const cli = new URL("../src/cli.ts", import.meta.url);
@@ -20,7 +22,7 @@ test("CLI exposes upstream-style initialization with fixed local providers and m
   assert(!help.includes("--branch"));
   assert.throws(() => execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "run"], {
     encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-  }), error => error instanceof Error && "stderr" in error && /仅支持 init 和 doctor/u.test(String(error.stderr)));
+  }), error => error instanceof Error && "stderr" in error && /仅支持 init、doctor 和 setup-browser/u.test(String(error.stderr)));
   for (const args of [["--agent", "claude-code"], ["--agent=pi"], ["--sandbox", "docker"], ["--sandbox=no-sandbox"]]) {
     assert.throws(() => execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "init", ...args], {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -83,14 +85,26 @@ test("initialized template executes without manual provider edits", { skip: proc
   assert(generated.includes("sandbox: seatbelt()"));
   assert(generated.includes('"@liumingjian/sandcastle-local/providers"'));
   assert(!generated.includes(f.codexHome));
+  // Exercise migration of a pre-bridge scaffold, then verify it is idempotent.
+  await writeFile(mainPath, generated.slice(browserPrelude.length));
+  for (let index = 0; index < 2; index++) {
+    execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname, "setup-browser"], {
+      cwd: f.repo, stdio: "pipe", timeout: 15_000, env,
+    });
+    assert.equal(await readFile(mainPath, "utf8"), generated);
+  }
   assert(!(await readFile(join(f.repo, ".sandcastle", ".env.example"), "utf8")).includes("CODEX_API_KEY="));
   assert.throws(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname,
     "init", "--issue-tracker", "custom", "--template", "blank"], { cwd: f.repo, stdio: "pipe", env }));
   assert.equal(await readFile(mainPath, "utf8"), generated);
-  await writeFile(join(f.repo, ".sandcastle", "prompt.md"), "MAKE_COMMIT\n");
-  const packageScope = join(f.repo, "node_modules", "@liumingjian");
-  await mkdir(packageScope, { recursive: true });
-  await symlink(new URL("../", import.meta.url).pathname, join(packageScope, "sandcastle-local"));
+  await writeFile(join(f.repo, ".sandcastle", "prompt.md"), "MAKE_COMMIT\nBROWSER_PROBE\n");
+  // Install a real package: a symlink back to this checkout is outside Seatbelt.
+  const packed = JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", f.root], {
+    cwd: new URL("../", import.meta.url), encoding: "utf8", stdio: "pipe",
+  }))[0].filename as string;
+  execFileSync("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", join(f.root, packed)], {
+    cwd: f.repo, stdio: "pipe", timeout: 30_000,
+  });
   const bin = join(f.root, "bin");
   await mkdir(bin);
   await copyFile(new URL("./fixtures/codex.mjs", import.meta.url), join(bin, "codex"));
@@ -110,6 +124,11 @@ test("initialized template executes without manual provider edits", { skip: proc
   assert.equal(git(["rev-parse", "HEAD^"]), base);
   assert.equal(git(["branch", "--format=%(refname:short)"]), "main");
   assert.equal(await readFile(join(f.repo, "agent-result.txt"), "utf8"), "local CLI fixture completed\n");
+  const screenshot = await readFile(join(f.repo, "output", "playwright", "probe.png"));
+  assert.equal(screenshot.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  const { endpoint, wsEndpoint } = JSON.parse(await readFile(join(f.repo, "browser-result.json"), "utf8"));
+  await assert.rejects(fetch(endpoint));
+  await assert.rejects(chromium.connect(wsEndpoint, { timeout: 1000 }));
 });
 
 test("all templates and issue tracker scaffolds retain upstream content", { skip: process.platform !== "darwin", timeout: 120_000 }, async t => {
@@ -133,11 +152,20 @@ test("all templates and issue tracker scaffolds retain upstream content", { skip
         cwd: localDir, stdio: "pipe", timeout: 15_000, env: { ...process.env, CODEX_HOME: f.codexHome },
       });
       const files = await readdir(join(upstreamDir, ".sandcastle"));
-      assert.deepEqual(await readdir(join(localDir, ".sandcastle")), files, label);
+      assert.deepEqual(await readdir(join(localDir, ".sandcastle")), [...files, "BROWSER.md"].sort(), label);
+      assert.match(await readFile(join(localDir, ".sandcastle", "BROWSER.md"), "utf8"), /connectBrowser/u);
       for (const file of files) {
         const normalize = (text: string) => text.replace(/"(?:@ai-hero\/sandcastle(?:\/sandboxes\/seatbelt)?|@liumingjian\/sandcastle-local\/providers)"/gu, '"AUTH_PROVIDER"');
         let expected = await readFile(join(upstreamDir, ".sandcastle", file), "utf8");
         let actual = await readFile(join(localDir, ".sandcastle", file), "utf8");
+        if (/^main\.(mts|ts)$/u.test(file)) {
+          assert(actual.startsWith(browserPrelude));
+          actual = actual.slice(browserPrelude.length);
+        }
+        if (file.endsWith("prompt.md")) {
+          assert(actual.endsWith(browserPrompt));
+          actual = actual.slice(0, -browserPrompt.length);
+        }
         if (file === ".env.example") {
           expected = expected.split("\n").slice(2).join("\n");
           actual = actual.split("\n").slice(1).join("\n");

@@ -38,7 +38,7 @@ npx sandcastle-local init
 - 选择 template：blank、simple-loop、sequential-reviewer、parallel-planner 或 parallel-planner-with-review。
 - 按上游流程确认 GitHub 标签创建、模板依赖安装等操作。
 
-生成的 `.sandcastle/main.mts`（或 `.ts`）会自动接入本机登录。提示词、审查标准、tracker 配置和任务编排保留上游内容，不需要手动修改登录代码。`.env.example` 仅移除 Codex API key 要求；GitHub 等 tracker 的认证要求保持不变。
+生成的 `.sandcastle/main.mts`（或 `.ts`）会自动接入本机登录和按需启动的宿主浏览器桥接。提示词保留上游内容，并追加 `.sandcastle/BROWSER.md` 的浏览器使用指引。审查标准、tracker 配置和任务编排沿用上游。`.env.example` 仅移除 Codex API key 要求；GitHub 等 tracker 的认证要求保持不变。
 
 非交互式初始化沿用上游参数，例如：
 
@@ -84,7 +84,7 @@ npx tsx .sandcastle/main.mts
 
 若上游生成 `.sandcastle/main.ts`，使用对应文件名。也可按上游提示添加 package.json 的 `sandcastle` 脚本，再运行 `npm run sandcastle`。
 
-执行使用上游原生 API。本包只适配 Codex/Seatbelt provider 的登录目录和会话路径，不添加任务 `run` 命令，不决定分支、轮次、hook、超时、审查、并行或合并策略。Seatbelt 没有显式分支策略时，会按照上游默认行为直接在当前检出目录执行。
+执行使用上游原生 API。本包适配 Codex/Seatbelt provider 的登录目录、会话路径和浏览器桥接环境变量，由生成入口管理宿主浏览器生命周期。分支、轮次、hook、任务超时、审查、并行或合并策略仍由上游控制。Seatbelt 没有显式分支策略时，会按照上游默认行为直接在当前检出目录执行。
 
 ## 登录检查
 
@@ -123,6 +123,40 @@ printf '%s' 'Reply exactly OK. Do not use tools.' | codex exec --json -m gpt-6.1
 ```
 
 例如服务返回 `429 Too Many Requests` 时，需要检查该模型的额度、可用性和限流，或将 `.sandcastle/main.mts` 中的模型改为当前账户已验证可用的模型。模板显式传入的模型优先于宿主配置；仅修改宿主默认模型不会改变现有模板。
+
+### Chromium / Playwright 启动失败排查
+
+若 Chromium 报 `bootstrap_check_in ... MachPortRendezvousServer ... Permission denied (1100)`，先区分宿主与 Seatbelt 内的启动结果。本机已复现：同一个 Chromium 在宿主正常启动，在上游 `seatbelt()` 内失败，即使浏览器文件已经只读挂载到沙箱。该错误发生在 Chromium 注册 Mach 服务时；把浏览器复制到工作区、修改文件执行权限或添加 `--no-sandbox` 都不能补充外层 Seatbelt 的 Mach 权限。本机已验证 `--no-sandbox` 仍失败。
+
+脚手架现在通过宿主浏览器桥接解决此问题：生成入口使用 `await using` 管理服务，首次连接时才启动独立 Chromium，沙箱内通过 `connectBrowser()` 运行浏览器旅程。任务正常结束或抛错时关闭服务与浏览器，无需手动启动调试端口。
+
+**已有项目**：先更新已安装的本包，再在项目根目录执行：
+
+```bash
+npx sandcastle-local setup-browser
+npx playwright-core install chromium
+npx tsx .sandcastle/main.mts
+```
+
+`setup-browser` 可重复执行，仅补充入口的浏览器生命周期、使用说明和提示词指引。新初始化的项目已自动接入，只需在首次使用浏览器前于宿主运行 `npx playwright-core install chromium`；也可设置宿主 `BROWSER_EXECUTABLE_PATH` 指向已有 Chromium。普通任务不需要安装或启动浏览器。
+
+浏览器测试使用包内统一版本的客户端，避免宿主与沙箱的 Playwright 协议版本不匹配：
+
+```ts
+import { connectBrowser } from "@liumingjian/sandcastle-local/browser";
+
+const browser = await connectBrowser();
+try {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  // Run the project's browser journey and screenshot assertions here.
+  await context.close();
+} finally {
+  await browser.close();
+}
+```
+
+Playwright Test 可通过自定义 `browser` fixture 调用此 helper；已有 `chromium.launch()` 脚本需改用 `connectBrowser()`。每个并行测试使用独立 context。桥接地址通过 `SANDCASTLE_BROWSER_ENDPOINT` 注入 Seatbelt，服务仅监听 localhost，浏览器使用独立临时 profile。浏览器在宿主执行，文件访问遵循宿主权限；沙箱里的客户端仍遵循原有 Seatbelt 策略。项目仍需执行自己的旅程和截图基线比较。验证细节见 [验证记录](docs/verification.md#chromium-under-seatbelt)。
 
 ## 版本与开发
 

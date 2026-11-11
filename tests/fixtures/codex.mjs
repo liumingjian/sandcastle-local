@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs"
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 if (process.argv.includes("--version")) {
   process.stdout.write("codex-cli fixture\n");
@@ -38,6 +39,23 @@ mkdirSync(sessions, { recursive: true });
 const session = join(sessions, `rollout-fixture-${id}.jsonl`);
 appendFileSync(session, JSON.stringify({ type: "session_meta", payload: { id, cwd: process.cwd() } }) + "\n");
 const git = argv => execFileSync("git", argv, { stdio: "ignore" });
+if (input.includes("BROWSER_PROBE")) {
+  const { connectBrowser } = await import(pathToFileURL(join(process.cwd(), "node_modules/@liumingjian/sandcastle-local/dist/browser.js")));
+  const browser = await connectBrowser();
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto('data:text/html,<button onclick="this.textContent=\'Passed\'">Run probe</button>');
+    await page.getByRole("button", { name: "Run probe" }).click();
+    if (await page.getByRole("button").textContent() !== "Passed") throw new Error("Browser interaction failed");
+    mkdirSync("output/playwright", { recursive: true });
+    await page.screenshot({ path: "output/playwright/probe.png" });
+    const endpoint = process.env.SANDCASTLE_BROWSER_ENDPOINT;
+    const { wsEndpoint } = await (await fetch(endpoint)).json();
+    writeFileSync("browser-result.json", JSON.stringify({ endpoint, wsEndpoint }));
+    await context.close();
+  } finally { await browser.close(); }
+}
 if (input.includes("MAKE_COMMIT")) {
   writeFileSync("agent-result.txt", "local CLI fixture completed\n");
   git(["add", "agent-result.txt"]);

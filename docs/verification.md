@@ -1,5 +1,31 @@
 # Verification record
 
+## Chromium under Seatbelt
+
+The scaffold repair now integrates a lazy host browser server into every generated template. `setup-browser` applies the same integration to existing projects and is idempotent. The transport uses Playwright's native server protocol with one pinned playwright-core version on both ends; the CDP experiment below remains the original diagnostic evidence. On 2026-11-11, `npm run check` passed locally: build, type checking, 11 passing tests, and one unsupported-platform test skipped. No business acceptance or screenshot baseline comparison is claimed.
+
+The regression command is `npm run check` after installing the host browser with `npx playwright-core install chromium`. The initialized-template test packs and installs the real package offline into a temporary project, initializes a blank template, removes the browser prelude to model an older scaffold, migrates it twice, and executes its generated entry point through the fixture Codex CLI inside real Seatbelt. The fixture calls the public connectBrowser() helper, opens a page, clicks a button, asserts the updated text, and writes a PNG into the sandbox workspace. The test checks the PNG signature and verifies both the discovery endpoint and browser WebSocket are unreachable after the entry point exits. No model request is needed. The macOS CI job installs the matching browser before running checks.
+
+Other tests exercise lazy startup with a missing executable, actionable errors and retry, loopback binding, rejection of unrelated/browser-origin requests, environment restoration, and idempotent disposal. All 15 template/tracker combinations are compared with upstream after removing only the intended provider substitutions, browser prelude, prompt addendum, and login example change. The generated BROWSER.md is checked separately.
+
+On 2026-11-11, Chromium headless shell from the local Playwright cache (`chromium_headless_shell-1248`, macOS arm64) was launched with `--headless --disable-gpu --dump-dom 'data:text/html,<title>browser-probe</title>'`. On the host it exited successfully and printed the expected HTML. The same executable, mounted read-only, failed through upstream `createSandbox({ cwd, sandbox: seatbelt({ mounts }) })` and `sandbox.exec(command)`:
+
+```text
+FATAL:base/apple/mach_port_rendezvous_mac.cc:159
+Check failed: kr == KERN_SUCCESS.
+bootstrap_check_in org.chromium.Chromium.MachPortRendezvousServer.<pid>: Permission denied (1100)
+```
+
+Repeating the sandbox invocation with `--no-sandbox` produced the same error and exit code 1. The failure does not depend on the application's frontend. Chromium's [Mach rendezvous implementation](https://github.com/chromium/chromium/blob/main/base/apple/mach_port_rendezvous_mac.cc) registers its bootstrap service during startup. The installed Sandcastle 0.14.0 profile denies operations by default and provides no `mach-register` allowance. Its public Seatbelt options expose only mounts, environment, and output limits. This places the observed startup failure at the upstream sandbox boundary; no adapter authentication code or upstream policy was changed. There is no adapter-level regression seam for changing that upstream policy.
+
+A separate smoke probe launched the same browser on the host with a fresh temporary profile, `--remote-debugging-address=127.0.0.1`, and `--remote-debugging-port=0`. A host HTTP server served a fixture with a button. An unmodified upstream Seatbelt sandbox mounted the installed Playwright dependency read-only and ran a Node client that connected with `chromium.connectOverCDP(endpoint)`. The client created a context, navigated to the host fixture, clicked its button by accessible role, asserted that its text changed from `Run probe` to `Passed`, and captured a screenshot. The result was:
+
+```json
+{"cdp":"passed","interaction":"passed","screenshotBytes":5728}
+```
+
+The screenshot's PNG signature was asserted; stderr was empty and the client exited with code 0. The probe closed the context, disconnected the client, closed the sandbox, stopped the host browser and HTTP server, and removed the temporary browser profile. It used no model requests or login profile. The README records the host-launch and client-connection procedure. This verifies the browser transport, interaction, and screenshot capture only: no business journey, screenshot baseline comparison, or issue acceptance was performed. The host browser operates with host permissions; CDP does not extend Seatbelt isolation to that browser.
+
 ## Initialization and version alignment (current)
 
 Git-source installation was also verified using a disposable committed snapshot of the current working tree and `npm install --save-dev git+file://...`. npm fetched the Git source, installed its build dependencies, ran prepare, and installed a working CLI reporting 0.14.0. The installed CLI initialized a blank template with local authentication already connected. This validates the Git preparation lifecycle; the snapshot was local, and the unpushed working-tree changes were not tested through the GitHub remote. The README now documents direct HTTPS/SSH GitHub installation rather than requiring a manual clone. The GitHub repository was private when checked.

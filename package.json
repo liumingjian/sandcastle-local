@@ -12,6 +12,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    },
     "./providers": {
       "types": "./dist/providers.d.ts",
       "import": "./dist/providers.js"
@@ -33,6 +37,7 @@
   },
   "dependencies": {
     "@ai-hero/sandcastle": "0.14.0",
+    "playwright-core": "1.65.0",
     "smol-toml": "1.9.1"
   },
   "devDependencies": {

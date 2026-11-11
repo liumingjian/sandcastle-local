@@ -15,6 +15,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: npx playwright-core install chromium
       - run: npm run check
   unsupported-platform:
     runs-on: ubuntu-latest

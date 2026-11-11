@@ -129,7 +129,10 @@ async function providersFor(profile: { codexHome: string; sessionsDir: string })
     }),
     seatbelt: (options: SeatbeltOptions = {}) => seatbelt({
       ...options,
-      env: { ...options.env, CODEX_HOME: profile.codexHome },
+      env: {
+        ...(process.env.SANDCASTLE_BROWSER_ENDPOINT ? { SANDCASTLE_BROWSER_ENDPOINT: process.env.SANDCASTLE_BROWSER_ENDPOINT } : {}),
+        ...options.env, CODEX_HOME: profile.codexHome,
+      },
       mounts: [
         ...(options.mounts ?? []),
         { hostPath: profile.codexHome, sandboxPath: profile.codexHome, readonly: false },

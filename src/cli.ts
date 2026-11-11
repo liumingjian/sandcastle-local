@@ -2,12 +2,13 @@
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { codexOnSeatbelt, verifyCodexAuth } from "./index.js";
-import { initialize, upstreamInstallation } from "./init.js";
+import { configureBrowser, initialize, upstreamInstallation } from "./init.js";
 
 const help = `sandcastle-local — 本机 Codex + Seatbelt
 
 用法:
   sandcastle-local init [上游初始化选项]
+  sandcastle-local setup-browser
   sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
   sandcastle-local --version
 
@@ -15,6 +16,7 @@ init 固定使用本机 Codex 和 Seatbelt，其余初始化与模板流程沿�
 生成脚本自动复用本机登录，按上游说明执行，无需手动修改 provider。
 使用 init --help 查看初始化选项。
 doctor 默认发送最小模型请求验证登录；--offline 只检查本地配置。
+setup-browser 为已有脚手架接入浏览器桥接，可重复执行。
 `;
 
 const initHelp = `sandcastle-local init
@@ -33,6 +35,11 @@ const initHelp = `sandcastle-local init
 async function main() {
   const args = process.argv.slice(2);
   const upstream = await upstreamInstallation();
+  if (args.length === 1 && args[0] === "setup-browser") {
+    await configureBrowser();
+    process.stdout.write("已接入浏览器桥接。首次使用前在宿主运行 npx playwright-core install chromium，然后重新启动生成的入口。\n");
+    return;
+  }
   if (args.length === 1 && args[0] === "--version") {
     process.stdout.write(upstream.version + "\n");
     return;
@@ -59,7 +66,7 @@ async function main() {
     return;
   }
   if (positionals.length !== 1 || positionals[0] !== "doctor") {
-    throw new Error("仅支持 init 和 doctor。任务执行请运行初始化生成的脚本。");
+    throw new Error("仅支持 init、doctor 和 setup-browser。任务执行请运行初始化生成的脚本。");
   }
   const adapted = await codexOnSeatbelt({
     ...(values.model === undefined ? {} : { model: values.model }),
