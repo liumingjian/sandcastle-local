@@ -51,7 +51,7 @@ async function installFixturePackage(directory: string, destination: string) {
   const packed = JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", destination], {
     cwd: new URL("../", import.meta.url), encoding: "utf8", stdio: "pipe",
   }))[0].filename as string;
-  execFileSync("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", join(destination, packed)], {
+  execFileSync("npm", ["install", "--prefer-offline", "--ignore-scripts", "--no-audit", "--no-fund", join(destination, packed)], {
     cwd: directory, stdio: "pipe", timeout: 30_000,
   });
 }
