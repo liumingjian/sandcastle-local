@@ -2,6 +2,16 @@
 
 ## Chromium under Seatbelt
 
+### Migration and ignored-worktree repair
+
+A subsequent report from Stack Nexus issue #38 reproduced two gaps in the original repair: both root main.mts and .sandcastle/main.mts lacked bridge startup, and the ignored scaffold guide was absent from the task's named worktree. The added regression command, `node --import tsx --test --test-name-pattern 'custom entries' tests/local.test.ts`, first failed with `Browser configuration is missing in the task worktree`. After adding custom/root entry migration and guide copying, it passed, including real browser interaction and screenshot capture inside Seatbelt. Default discovery, explicit --entry, and repeated migration are covered. `npm run check` then passed with 12 passing tests and one platform skip, including all 15 template/tracker combinations.
+
+The host's two Stack Nexus entry points were migrated, and BROWSER.md was placed in the existing issue worktree. A fresh host bridge then resumed that named worktree under real Seatbelt. Guide readability, endpoint injection, and connector import all passed. The frontend build passed, and all three previously blocked suites executed: TestApprovedDesignBrowser, TestUIReviewRegressionsBrowser, and TestEnvironmentOverviewBrowser. They produced fresh artifacts under the worktree's output/playwright/issue38-host-recovery-20261111/ directory.
+
+All three suites failed on acceptance assertions after browser connection: six visual regions exceeded the current comparison criteria; the UI review passed 34 of 36 checks, with two timeouts; the overview reached its journey phase and failed a `0 !== 1` assertion. These are follow-up acceptance failures, not a missing bridge or unreadable guide. No baseline, threshold, product code, or issue status was changed. Issue #38 remains open. Host browser and discovery service were disposed after the run; the endpoint is per-run and must not be reused.
+
+### Initial bridge implementation
+
 The scaffold repair now integrates a lazy host browser server into every generated template. `setup-browser` applies the same integration to existing projects and is idempotent. The transport uses Playwright's native server protocol with one pinned playwright-core version on both ends; the CDP experiment below remains the original diagnostic evidence. On 2026-11-11, `npm run check` passed locally: build, type checking, 11 passing tests, and one unsupported-platform test skipped. No business acceptance or screenshot baseline comparison is claimed.
 
 The regression command is `npm run check` after installing the host browser with `npx playwright-core install chromium`. The initialized-template test packs and installs the real package offline into a temporary project, initializes a blank template, removes the browser prelude to model an older scaffold, migrates it twice, and executes its generated entry point through the fixture Codex CLI inside real Seatbelt. The fixture calls the public connectBrowser() helper, opens a page, clicks a button, asserts the updated text, and writes a PNG into the sandbox workspace. The test checks the PNG signature and verifies both the discovery endpoint and browser WebSocket are unreachable after the entry point exits. No model request is needed. The macOS CI job installs the matching browser before running checks.

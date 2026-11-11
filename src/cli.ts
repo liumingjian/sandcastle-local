@@ -8,7 +8,7 @@ const help = `sandcastle-local — 本机 Codex + Seatbelt
 
 用法:
   sandcastle-local init [上游初始化选项]
-  sandcastle-local setup-browser
+  sandcastle-local setup-browser [--entry PATH]
   sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
   sandcastle-local --version
 
@@ -35,9 +35,11 @@ const initHelp = `sandcastle-local init
 async function main() {
   const args = process.argv.slice(2);
   const upstream = await upstreamInstallation();
-  if (args.length === 1 && args[0] === "setup-browser") {
-    await configureBrowser();
-    process.stdout.write("已接入浏览器桥接。首次使用前在宿主运行 npx playwright-core install chromium，然后重新启动生成的入口。\n");
+  if (args[0] === "setup-browser") {
+    const { values, positionals } = parseArgs({ args: args.slice(1), allowPositionals: true, options: { entry: { type: "string" } } });
+    if (positionals.length) throw new Error("setup-browser 仅接受 --entry PATH。");
+    const entries = await configureBrowser(process.cwd(), values.entry);
+    process.stdout.write(`已接入浏览器桥接：\n${entries.join("\n")}\n首次使用前在宿主运行 npx playwright-core install chromium，然后重新启动上述实际使用的入口。\n`);
     return;
   }
   if (args.length === 1 && args[0] === "--version") {

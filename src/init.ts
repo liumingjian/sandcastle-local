@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { localCodexProviders } from "./index.js";
 
@@ -56,17 +56,33 @@ export async function initialize(args: string[], cwd = process.cwd()) {
   return 0;
 }
 
-export async function configureBrowser(cwd = process.cwd()) {
+export async function configureBrowser(cwd = process.cwd(), entry?: string) {
   const directory = join(cwd, ".sandcastle");
-  const mainName = (await readdir(directory)).find(name => /^main\.(mts|ts)$/u.test(name));
-  if (!mainName) throw new Error("未找到 .sandcastle/main.mts 或 main.ts，请先初始化项目。");
-  const mainPath = join(directory, mainName);
-  const main = await readFile(mainPath, "utf8");
-  if (!main.includes('"@liumingjian/sandcastle-local/providers"')) {
-    throw new Error("入口未使用本机 providers，无法自动接入浏览器环境变量。");
+  const candidates = entry ? [entry] : [".sandcastle/main.mts", ".sandcastle/main.ts", "main.mts", "main.ts"];
+  const entries: { path: string; source: string }[] = [];
+  for (const name of candidates) {
+    const path = resolve(cwd, name);
+    let source: string;
+    try { source = await readFile(path, "utf8"); }
+    catch (error) {
+      if (!entry && error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!/["']@liumingjian\/sandcastle-local\/providers["']/u.test(source)) {
+      if (entry) throw new Error("入口未使用本机 providers，无法自动接入浏览器环境变量。");
+      continue;
+    }
+    entries.push({ path, source });
   }
-  if (!main.includes(browserPrelude)) await writeFile(mainPath, browserPrelude + main);
+  if (!entries.length) throw new Error("未找到使用本机 providers 的入口；可用 setup-browser --entry PATH 指定。");
+  await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "BROWSER.md"), browserInstructions);
+  for (const { path, source } of entries) {
+    let adapted = source.replace(/\bcopyToWorktree\s*(?::|=)\s*\[([^\]]*)\]/gu, (match, items: string) =>
+      items.includes(".sandcastle/BROWSER.md") ? match : match.replace("[", '[".sandcastle/BROWSER.md", '));
+    if (!adapted.includes(browserPrelude)) adapted = browserPrelude + adapted;
+    if (adapted !== source) await writeFile(path, adapted);
+  }
   for (const name of await readdir(directory)) {
     if (name.endsWith("prompt.md")) {
       const path = join(directory, name);
@@ -74,6 +90,7 @@ export async function configureBrowser(cwd = process.cwd()) {
       if (!prompt.includes("<!-- sandcastle-local browser -->")) await writeFile(path, prompt + browserPrompt);
     }
   }
+  return entries.map(({ path }) => path);
 }
 
 export const browserPrelude = 'import { startBrowserBridge } from "@liumingjian/sandcastle-local/browser";\n\nawait using browserBridge = await startBrowserBridge();\n\n';
@@ -84,6 +101,8 @@ const browserInstructions = `# Browser testing under Seatbelt
 The generated main entry point owns a lazy host Chromium server. Each Seatbelt
 sandbox receives SANDCASTLE_BROWSER_ENDPOINT. Browser tests must connect through
 the helper below instead of calling chromium.launch() inside Seatbelt.
+The scaffold includes this file in copyToWorktree even when .sandcastle is ignored.
+Custom entry points must retain this copy along with their existing copy paths.
 
 \`\`\`ts
 import { connectBrowser } from "@liumingjian/sandcastle-local/browser";

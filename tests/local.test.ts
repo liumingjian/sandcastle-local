@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { TestContext } from "node:test";
 import { codex, createSandbox, run } from "@ai-hero/sandcastle";
 import { codexOnSeatbelt, resolveLocalCodex, verifyCodexAuth } from "../src/index.js";
-import { browserPrelude, browserPrompt } from "../src/init.js";
+import { browserPrelude, browserPrompt, configureBrowser } from "../src/init.js";
 import { chromium } from "playwright-core";
 
 test("CLI exposes upstream-style initialization with fixed local providers and matching version", () => {
@@ -46,6 +46,54 @@ async function fixture(t: TestContext, initialCommit = true) {
   if (initialCommit) git(["commit", "--allow-empty", "-m", "Initial fixture"]);
   return { root, codexHome, repo };
 }
+
+async function installFixturePackage(directory: string, destination: string) {
+  const packed = JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", destination], {
+    cwd: new URL("../", import.meta.url), encoding: "utf8", stdio: "pipe",
+  }))[0].filename as string;
+  execFileSync("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", join(destination, packed)], {
+    cwd: directory, stdio: "pipe", timeout: 30_000,
+  });
+}
+
+test("custom entries carry browser configuration into worktrees with an ignored scaffold", { skip: process.platform !== "darwin", timeout: 60_000 }, async t => {
+  const f = await fixture(t);
+  await mkdir(join(f.repo, ".sandcastle"));
+  await writeFile(join(f.repo, ".gitignore"), ".sandcastle/\nnode_modules/\n");
+  execFileSync("git", ["add", ".gitignore"], { cwd: f.repo });
+  execFileSync("git", ["commit", "-m", "Ignore local scaffolding"], { cwd: f.repo, stdio: "ignore" });
+  const source = `import * as sandcastle from "@liumingjian/sandcastle-local/providers";
+import { seatbelt } from "@liumingjian/sandcastle-local/providers";
+const copyToWorktree = ["node_modules"];
+await using sandbox = await sandcastle.createSandbox({
+  cwd: process.cwd(), sandbox: seatbelt(), branch: "browser/worktree", copyToWorktree,
+});
+const probe = await sandbox.exec('test -r .sandcastle/BROWSER.md && test -n "$SANDCASTLE_BROWSER_ENDPOINT"');
+if (probe.exitCode !== 0) throw new Error("Browser configuration is missing in the task worktree");
+await sandbox.run({ agent: sandcastle.codex("fixture-model", { captureSessions: false }), prompt: "BROWSER_PROBE" });
+const png = await sandbox.exec("test -s output/playwright/probe.png");
+if (png.exitCode !== 0) throw new Error("Browser screenshot was not written");
+`;
+  await writeFile(join(f.repo, ".sandcastle", "main.mts"), source);
+  await writeFile(join(f.repo, "main.mts"), source);
+  await configureBrowser(f.repo, "main.mts");
+  assert.equal(await readFile(join(f.repo, ".sandcastle", "main.mts"), "utf8"), source);
+  const migrated = await readFile(join(f.repo, "main.mts"), "utf8");
+  execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), new URL("../src/cli.ts", import.meta.url).pathname,
+    "setup-browser", "--entry", "main.mts"], { cwd: f.repo, stdio: "pipe" });
+  assert.equal(await readFile(join(f.repo, "main.mts"), "utf8"), migrated);
+  assert.equal((await configureBrowser(f.repo)).length, 2);
+  assert.equal(await readFile(join(f.repo, "main.mts"), "utf8"), migrated);
+  await installFixturePackage(f.repo, f.root);
+  const bin = join(f.root, "bin");
+  await mkdir(bin);
+  await copyFile(new URL("./fixtures/codex.mjs", import.meta.url), join(bin, "codex"));
+  await chmod(join(bin, "codex"), 0o755);
+  execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), join(f.repo, "main.mts")], {
+    cwd: f.repo, stdio: "pipe", timeout: 30_000,
+    env: { ...process.env, CODEX_HOME: f.codexHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
+  });
+});
 
 test("unsupported operating systems fail without a sandbox fallback", { skip: process.platform === "darwin" }, async () => {
   await assert.rejects(resolveLocalCodex({ model: "fixture" }), /仅支持 macOS/u);
@@ -99,12 +147,7 @@ test("initialized template executes without manual provider edits", { skip: proc
   assert.equal(await readFile(mainPath, "utf8"), generated);
   await writeFile(join(f.repo, ".sandcastle", "prompt.md"), "MAKE_COMMIT\nBROWSER_PROBE\n");
   // Install a real package: a symlink back to this checkout is outside Seatbelt.
-  const packed = JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", f.root], {
-    cwd: new URL("../", import.meta.url), encoding: "utf8", stdio: "pipe",
-  }))[0].filename as string;
-  execFileSync("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", join(f.root, packed)], {
-    cwd: f.repo, stdio: "pipe", timeout: 30_000,
-  });
+  await installFixturePackage(f.repo, f.root);
   const bin = join(f.root, "bin");
   await mkdir(bin);
   await copyFile(new URL("./fixtures/codex.mjs", import.meta.url), join(bin, "codex"));
@@ -161,6 +204,7 @@ test("all templates and issue tracker scaffolds retain upstream content", { skip
         if (/^main\.(mts|ts)$/u.test(file)) {
           assert(actual.startsWith(browserPrelude));
           actual = actual.slice(browserPrelude.length);
+          actual = actual.replaceAll('[".sandcastle/BROWSER.md", ', "[");
         }
         if (file.endsWith("prompt.md")) {
           assert(actual.endsWith(browserPrompt));

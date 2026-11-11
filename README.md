@@ -138,7 +138,9 @@ npx playwright-core install chromium
 npx tsx .sandcastle/main.mts
 ```
 
-`setup-browser` 可重复执行，仅补充入口的浏览器生命周期、使用说明和提示词指引。新初始化的项目已自动接入，只需在首次使用浏览器前于宿主运行 `npx playwright-core install chromium`；也可设置宿主 `BROWSER_EXECUTABLE_PATH` 指向已有 Chromium。普通任务不需要安装或启动浏览器。
+`setup-browser` 可重复执行，默认检查 `.sandcastle/main.mts`、`.sandcastle/main.ts` 和根目录 `main.mts`、`main.ts`，为其中使用本机 providers 的入口补充桥接启动代码，并打印实际修改范围。其他入口使用 `npx sandcastle-local setup-browser --entry path/to/entry.mts`。重启时请使用实际运行的入口。
+
+初始化和迁移也会在模板的 `copyToWorktree` 数组中加入 `.sandcastle/BROWSER.md`，确保 `.sandcastle/` 被 Git 忽略时，独立 worktree 仍能读取说明。不会复制整个 `.sandcastle/` 或其中的 `.env`。新初始化的项目已自动接入，只需在首次使用浏览器前于宿主运行 `npx playwright-core install chromium`；也可设置宿主 `BROWSER_EXECUTABLE_PATH` 指向已有 Chromium。普通任务不需要安装或启动浏览器。
 
 浏览器测试使用包内统一版本的客户端，避免宿主与沙箱的 Playwright 协议版本不匹配：
 
