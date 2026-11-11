@@ -1,6 +1,6 @@
 # sandcastle-local
 
-与 Sandcastle 使用相同的安装、初始化和模板执行流程，固定使用 **本机 Codex + macOS Seatbelt**，自动复用本机已有登录。其余 issue tracker、template、提示词、循环、审查、并行、分支和合并行为均沿用上游。
+与 Sandcastle 使用相同的安装、初始化和模板执行流程，固定使用 **本机 Codex + macOS Seatbelt**，自动复用本机已有登录。模型由用户选择；其余 issue tracker、template、提示词、循环、审查、并行、分支和合并行为均沿用上游。
 
 **本包版本与所依赖的上游版本严格相同，目前均为 `0.14.0`。** 不使用独立版本号、版本范围或本地版本后缀。
 
@@ -46,11 +46,35 @@ npx sandcastle-local init
 npx sandcastle-local init   --template simple-loop   --issue-tracker github-issues   --create-label false
 ```
 
-需要 schema validator 的 planner 模板，在非交互模式下还需按上游要求指定 `--install-template-deps true` 或 `false`。`--model` 保留上游含义；省略时使用上游 Codex 默认模型。
+需要 schema validator 的 planner 模板，在非交互模式下还需按上游要求指定 `--install-template-deps true` 或 `false`。`--model MODEL` 沿用上游含义；省略时保留上游模板默认模型，本包不强制指定模型。
 
 可使用 `npx sandcastle-local init --help` 查看选项。`--agent codex` 和 `--sandbox seatbelt` 可显式传入，其他 agent/sandbox 值会被拒绝。已有 `.sandcastle/` 时沿用上游拒绝重新初始化的行为，不覆盖现有脚本。
 
+### 手动选择 Codex 模型
+
+**首次运行前，请打开生成的 `.sandcastle/main.mts`（或 `.ts`），手动检查并修改所有 `codex("模型名")` 调用。** 上游默认模型未必适用于当前账户。本机已验证可用的模型示例：
+
+```ts
+agent: sandcastle.codex("gpt-6.1-sol"),
+```
+
+如果模板使用具名导入，对应写法是 `agent: codex("gpt-6.1-sol")`。包含 planner、implementer、reviewer、merge 等多个角色的模板，需要逐个检查模型；它们可以按需使用不同模型。
+
+也可以在首次初始化时显式传入 `--model gpt-6.1-sol`。已有脚本需手动编辑，重新运行 init 不会覆盖它。修改宿主 Codex 的默认模型也不会覆盖脚本中显式传入的模型。
+
 ## 执行任务
+
+请从项目根目录执行。上游运行器要求 Git 仓库已有至少一次提交；仅执行 `git init` 还不够。可用 `git rev-parse --verify HEAD` 检查。
+
+如果新仓库尚无首次提交，先检查 `.gitignore`（至少忽略 `node_modules/`、`.env` 等本地文件），再选择需要纳入版本控制的项目文件并提交。也可以先建立空提交：
+
+```bash
+git commit --allow-empty -m "Initial commit"
+```
+
+此命令也会提交已暂存的文件，执行前可用 `git diff --cached --stat` 检查。尚未初始化 Git 的目录需先执行 `git init`。
+
+否则，上游可能报 `WorktreeError: fatal: ambiguous argument 'HEAD'` 或 `invalid reference: HEAD`。这是 Git 基线缺失，错误发生在 Codex 启动前。本包不会自动创建提交；完成首次提交后重新运行即可。使用独立 worktree 的模板还需将任务所需的项目文件提交到 Git，未跟踪文件不会自动进入 worktree。
 
 按照初始化输出配置 tracker、提示词和项目脚本，然后执行，例如：
 
@@ -82,10 +106,23 @@ sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
 
 - 登录目录按显式 `codexHome`（doctor 可用 `--codex-home`）、宿主 `CODEX_HOME`、`~/.codex` 的顺序选择。生成脚本在运行时解析当前用户的目录，不写入初始化机器的绝对路径。
 - 整个选定目录在 Seatbelt 内可读写，包括配置、凭证和会话。Codex 自己管理 token 刷新，无需复制凭证或额外回写。
+- `CODEX_HOME/skills` 中指向外部的符号链接会自动解析，并将真实目标以只读方式放行，包括技能内的嵌套链接。只放行链接的真实目标，不额外放行其所在仓库的其他目录；指向整个用户目录或其父目录的链接会被拒绝。断开的链接会跳过，循环链接不会重复遍历，修改链接后需重新启动脚本。
 - 仅支持已有 `auth.json` 文件登录，`cli_auth_credentials_store` 为 `file` 或未设置。不自动迁移登录、不修改宿主配置、不额外注入 API key。
 - 保留上游 Codex 选项和 Seatbelt 的原有环境变量、挂载与输出配置。默认会话路径对齐至选定登录目录的 sessions；显式 sessionStorage 配置保留。
 - 上游私有 HOME、网络和 `.sandcastle/.env` 处理逻辑保持原样。不要在 agent env 中重复定义 CODEX_HOME；上游禁止 agent/sandbox provider 的 env 键重叠。
 - 不支持 Keychain-only 登录或其他系统；不可用时明确报错，不降级为无沙箱执行。
+
+### Codex 启动失败排查
+
+`failed to scan skill path ... Operation not permitted` 表示技能链接的目标未获得读取权限。当前适配器会自动放行 `CODEX_HOME/skills` 的外部链接目标；已安装旧版的项目需要更新适配器。
+
+技能扫描错误不一定导致 Codex 退出。上游 `codex exited with code 1` 只展示 stderr，可能遗漏 JSON stdout 中的 `error` / `turn.failed`。可使用当前模板的模型运行最小请求，查看实际错误：
+
+```bash
+printf '%s' 'Reply exactly OK. Do not use tools.' | codex exec --json -m gpt-6.1-sol
+```
+
+例如服务返回 `429 Too Many Requests` 时，需要检查该模型的额度、可用性和限流，或将 `.sandcastle/main.mts` 中的模型改为当前账户已验证可用的模型。模板显式传入的模型优先于宿主配置；仅修改宿主默认模型不会改变现有模板。
 
 ## 版本与开发
 

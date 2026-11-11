@@ -46,6 +46,16 @@ The existing host CLI reported file-based API authentication. This proves reuse 
 
 Reproduce with `npm ci && npm run check`. Run `npm run test:live` only when a real model request using the current account is intended.
 
+## External skill links and model failure diagnosis
+
+On 2026-11-11, Codex CLI 0.167.1 failed to read four host skills linked outside CODEX_HOME. A real Seatbelt regression test reproduced EPERM before the fix and passed afterward. It covers an external skill, a nested reference link, a directory cycle, a dangling link, denied writes, and denied access to a sibling file. All four original host skill manifests were also readable inside Seatbelt after the fix.
+
+`npm run check` passed with nine passing tests and one unsupported-OS test skipped, including the build, version check, and type check.
+
+A minimal real request using the host-configured model succeeded even before the skill fix, proving the scan errors were not themselves fatal. A separate minimal request using the template's explicit gpt-5.4 model failed with HTTP 429 in JSON stdout. Upstream displayed only stderr for the nonzero exit, hiding this cause. No full issue-planning or implementation workflow was run during diagnosis.
+
+`npm run test:live` also passed after the skill fix with the host's gpt-6.1-sol model: real file login, Seatbelt, named branch, session capture, and a successful resume. All four roles in the existing sandcastle-test script were changed to gpt-6.1-sol at the user's request. The user subsequently clarified that model selection should be manual and documented in the README. Initialization therefore retains upstream model defaults and forwards explicit --model options without imposing a fixed model. The fixture initialization test verifies an arbitrary explicit model, and template compatibility tests compare all five templates and three trackers with upstream defaults.
+
 ## Doctor online verification update
 
 On 2026-11-10, doctor was changed from offline file checks to an actual sandboxed model request by default, at the user's request. Local type checks, tests, and declaration build passed: six tests passed and the unsupported-OS test was skipped on macOS.

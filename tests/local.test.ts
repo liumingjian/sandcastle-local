@@ -28,7 +28,7 @@ test("CLI exposes upstream-style initialization with fixed local providers and m
   }
 });
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, initialCommit = true) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "sandcastle-local-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const codexHome = join(root, "codex home");
@@ -41,7 +41,7 @@ async function fixture(t: TestContext) {
   git(["init", "-b", "main"]);
   git(["config", "user.name", "Fixture"]);
   git(["config", "user.email", "fixture@example.invalid"]);
-  git(["commit", "--allow-empty", "-m", "Initial fixture"]);
+  if (initialCommit) git(["commit", "--allow-empty", "-m", "Initial fixture"]);
   return { root, codexHome, repo };
 }
 
@@ -67,14 +67,16 @@ test("file login validation and model selection", { skip: process.platform !== "
 });
 
 test("initialized template executes without manual provider edits", { skip: process.platform !== "darwin", timeout: 60_000 }, async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, false);
   const cli = new URL("../src/cli.ts", import.meta.url);
   const env = { ...process.env, CODEX_HOME: f.codexHome };
   await writeFile(join(f.codexHome, "config.toml"), 'cli_auth_credentials_store = "file"\n');
-  execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname,
+  const initialized = execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname,
     "init", "--model", "fixture-model", "--issue-tracker", "custom", "--template", "blank"], {
-    cwd: f.repo, stdio: "pipe", timeout: 30_000, env,
+    cwd: f.repo, stdio: "pipe", timeout: 30_000, env, encoding: "utf8",
   });
+  assert.match(initialized, /首次提交/u);
+  assert.match(initialized, /git commit --allow-empty -m "Initial commit"/u);
   const mainPath = join(f.repo, ".sandcastle", "main.mts");
   const generated = await readFile(mainPath, "utf8");
   assert(generated.includes('agent: codex("fixture-model")'));
@@ -94,6 +96,11 @@ test("initialized template executes without manual provider edits", { skip: proc
   await copyFile(new URL("./fixtures/codex.mjs", import.meta.url), join(bin, "codex"));
   await chmod(join(bin, "codex"), 0o755);
   const git = (args: string[]) => execFileSync("git", args, { cwd: f.repo, encoding: "utf8", stdio: "pipe" }).trim();
+  assert.throws(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), mainPath], {
+    cwd: f.repo, stdio: "pipe", timeout: 30_000,
+    env: { ...env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+  }), error => error instanceof Error && "stderr" in error && /ambiguous argument 'HEAD'/u.test(String(error.stderr)));
+  git(["commit", "--allow-empty", "-m", "Initial commit"]);
   const base = git(["rev-parse", "HEAD"]);
   execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), mainPath], {
     cwd: f.repo, stdio: "pipe", timeout: 30_000,
@@ -263,6 +270,47 @@ test("real Seatbelt reuses login, persists refresh writes and denies unrelated h
     const result = await next.exec('test -r "$CODEX_HOME/auth.json"');
     assert.equal(result.exitCode, 0);
   } finally { await next.close(); }
+});
+
+test("Seatbelt reads external skill symlinks without granting writes or sibling access", { skip: process.platform !== "darwin" }, async t => {
+  const f = await fixture(t);
+  const external = await mkdtemp(join(homedir(), ".sandcastle-local-skills-"));
+  t.after(() => rm(external, { recursive: true, force: true }));
+  const skill = join(external, "skill");
+  const nested = join(external, "references");
+  await mkdir(skill);
+  await mkdir(nested);
+  await writeFile(join(skill, "SKILL.md"), "fixture skill");
+  await writeFile(join(nested, "guide.md"), "fixture reference");
+  await writeFile(join(external, "secret.txt"), "unrelated");
+  await symlink(nested, join(skill, "references"));
+  await symlink(skill, join(skill, "cycle"));
+  const skills = join(f.codexHome, "skills");
+  await mkdir(skills);
+  await symlink(skill, join(skills, "linked"));
+  await symlink(join(external, "missing"), join(skills, "broken"));
+  const { sandbox } = await codexOnSeatbelt({ codexHome: f.codexHome });
+  const handle = await createSandbox({ cwd: f.repo, sandbox, branch: "agent/skills" });
+  try {
+    const probe = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const skill = path.join(process.env.CODEX_HOME, 'skills', 'linked');
+      if (fs.readFileSync(path.join(skill, 'SKILL.md'), 'utf8') !== 'fixture skill') process.exit(1);
+      if (fs.readFileSync(path.join(skill, 'references', 'guide.md'), 'utf8') !== 'fixture reference') process.exit(2);
+      for (const action of [
+        () => fs.writeFileSync(path.join(skill, 'SKILL.md'), 'changed'),
+        () => fs.readFileSync(${JSON.stringify(join(external, "secret.txt"))}),
+      ]) {
+        let denied = false;
+        try { action(); } catch { denied = true; }
+        if (!denied) process.exit(3);
+      }
+    `;
+    const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+    const result = await handle.exec(`node -e ${quote(probe)}`);
+    assert.equal(result.exitCode, 0, result.stderr);
+  } finally { await handle.close(); }
 });
 
 test("upstream run isolates branches, captures and resumes sessions, and runs parallel tasks", { skip: process.platform !== "darwin", timeout: 120_000 }, async t => {
