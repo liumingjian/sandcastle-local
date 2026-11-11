@@ -51,5 +51,6 @@ export async function initialize(args: string[], cwd = process.cwd()) {
   await writeFile(envPath, env.replace(/^# OpenAI API key[^\n]*\nCODEX_API_KEY=\n/mu,
     "# Codex uses the existing local login; no Codex API key is required.\n"));
   process.stdout.write("\n已自动接入本机 Codex 登录，可按上游说明自定义提示词并运行生成的脚本。\n");
+  process.stdout.write('运行前请确认项目是 Git 仓库且已有首次提交（git rev-parse --verify HEAD）。\n新仓库可先提交项目文件，或执行 git commit --allow-empty -m "Initial commit" 建立基线。\n');
   return 0;
 }

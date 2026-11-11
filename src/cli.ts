@@ -22,7 +22,7 @@ const initHelp = `sandcastle-local init
 固定使用本机 Codex + Seatbelt；以下选项交由同版本上游处理：
   --template NAME                 选择上游模板；省略时交互选择
   --issue-tracker NAME            选择上游 issue tracker；省略时交互选择
-  --model MODEL                   指定模型；省略时使用上游 Codex 默认模型
+  --model MODEL                   指定模板模型；省略时使用上游默认值
   --create-label true|false       是否创建 GitHub 标签
   --install-template-deps true|false  是否安装模板依赖
 

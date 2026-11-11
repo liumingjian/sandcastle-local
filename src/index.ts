@@ -1,4 +1,4 @@
-import { access, readFile, realpath, stat } from "node:fs/promises";
+import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -87,7 +87,37 @@ export type LocalCodexAdapter = Awaited<ReturnType<typeof resolveLocalCodex>> & 
 
 type LocalProviders = { readonly codex: typeof codex; readonly seatbelt: typeof seatbelt };
 
-function providersFor(profile: { codexHome: string; sessionsDir: string }): LocalProviders {
+async function linkedSkillPaths(codexHome: string): Promise<string[]> {
+  const visited = new Set<string>();
+  const external = new Set<string>();
+  const home = await realpath(homedir());
+  async function visit(path: string): Promise<void> {
+    let target: string;
+    try {
+      target = await realpath(path);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw error;
+    }
+    if (visited.has(target)) return;
+    visited.add(target);
+    if (!contains(codexHome, target)) {
+      if (contains(target, home)) throw new Error("技能链接不能指向整个用户目录或其父目录。请链接具体技能目录。");
+      external.add(target);
+    }
+    if (!(await stat(target)).isDirectory()) return;
+    for (const entry of await readdir(target, { withFileTypes: true })) {
+      if (entry.isDirectory() || entry.isSymbolicLink()) await visit(join(target, entry.name));
+    }
+  }
+  await visit(join(codexHome, "skills"));
+  return [...external].filter(path => ![...external].some(parent => parent !== path && contains(parent, path)));
+}
+
+async function providersFor(profile: { codexHome: string; sessionsDir: string }): Promise<LocalProviders> {
+  const skillMounts = (await linkedSkillPaths(profile.codexHome)).map(path => ({
+    hostPath: path, sandboxPath: path, readonly: true,
+  }));
   return {
     codex: (model: string, options: CodexOptions = {}) => codex(model, {
       ...options,
@@ -103,6 +133,7 @@ function providersFor(profile: { codexHome: string; sessionsDir: string }): Loca
       mounts: [
         ...(options.mounts ?? []),
         { hostPath: profile.codexHome, sandboxPath: profile.codexHome, readonly: false },
+        ...skillMounts,
       ],
     }),
   };
@@ -115,7 +146,7 @@ export async function localCodexProviders(options: { readonly codexHome?: string
 export async function codexOnSeatbelt(options: LocalCodexOptions = {}): Promise<LocalCodexAdapter> {
   const resolved = await resolveLocalCodex(options);
   const { model: _model, codexHome: _codexHome, sandboxOptions, ...agentOptions } = options;
-  const providers = providersFor(resolved);
+  const providers = await providersFor(resolved);
   const agent = providers.codex(resolved.model, agentOptions);
   const sandbox = providers.seatbelt(sandboxOptions);
   return { agent, sandbox, ...resolved };
