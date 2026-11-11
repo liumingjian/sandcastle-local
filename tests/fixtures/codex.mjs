@@ -45,6 +45,6 @@ if (input.includes("MAKE_COMMIT")) {
 }
 process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: id }) + "\n");
 const marker = input.match(/SANDCASTLE_AUTH_[a-f0-9-]+/u)?.[0];
-const reply = model === "fixture-wrong-response" ? "unexpected response" : marker ?? "fixture completed";
+const reply = model === "fixture-wrong-response" ? "unexpected response" : marker ?? (input.startsWith("Context:") ? input : "fixture completed");
 process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: reply } }) + "\n");
 process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }) + "\n");

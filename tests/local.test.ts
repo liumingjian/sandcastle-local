@@ -1,29 +1,31 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { access, chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, realpath, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
-import { createSandbox, run } from "@ai-hero/sandcastle";
-import { assertLocalRunEnvironment, codexOnSeatbelt, resolveLocalCodex, verifyCodexAuth } from "../src/index.js";
+import { codex, createSandbox, run } from "@ai-hero/sandcastle";
+import { codexOnSeatbelt, resolveLocalCodex, verifyCodexAuth } from "../src/index.js";
 
-test("CLI validates required branch and mutually exclusive prompts before starting an agent", () => {
+test("CLI exposes upstream-style initialization with fixed local providers and matching version", () => {
   const cli = new URL("../src/cli.ts", import.meta.url);
-  const invoke = (args: string[]) => {
-    try {
-      return execFileSync(process.execPath, ["--import", "tsx", cli.pathname, ...args], {
-        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (error) {
-      if (error instanceof Error && "stderr" in error && typeof error.stderr === "string") return error.stderr;
-      throw error;
-    }
-  };
-  assert.match(invoke(["--help"]), /doctor/u);
-  assert.match(invoke(["run", "--prompt", "fixture"]), /必须指定 --branch/u);
-  assert.match(invoke(["run", "--branch", "agent/test", "--prompt", "fixture", "--prompt-file", "prompt.md"]), /只能指定/u);
-  assert.match(invoke(["run", "--branch", "agent/test", "--prompt", "fixture", "--effort", "invalid"]), /effort 必须/u);
+  const help = execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "--help"], { encoding: "utf8" });
+  assert.match(help, /doctor/u);
+  assert.match(help, /sandcastle-local init/u);
+  const version = execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "--version"], { encoding: "utf8" }).trim();
+  const own = JSON.parse(execFileSync(process.execPath, ["-p", 'JSON.stringify(require("./package.json"))'], { encoding: "utf8" }));
+  assert.equal(version, own.version);
+  assert.equal(version, own.dependencies["@ai-hero/sandcastle"]);
+  assert(!help.includes("--branch"));
+  assert.throws(() => execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "run"], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  }), error => error instanceof Error && "stderr" in error && /仅支持 init 和 doctor/u.test(String(error.stderr)));
+  for (const args of [["--agent", "claude-code"], ["--agent=pi"], ["--sandbox", "docker"], ["--sandbox=no-sandbox"]]) {
+    assert.throws(() => execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "init", ...args], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    }), error => error instanceof Error && "stderr" in error && /固定为/u.test(String(error.stderr)));
+  }
 });
 
 async function fixture(t: TestContext) {
@@ -64,15 +66,114 @@ test("file login validation and model selection", { skip: process.platform !== "
   await assert.rejects(resolveLocalCodex({ codexHome: homedir(), model: "fixture" }), /专用目录/u);
 });
 
-test("project env cannot override host login", async t => {
+test("initialized template executes without manual provider edits", { skip: process.platform !== "darwin", timeout: 60_000 }, async t => {
   const f = await fixture(t);
-  await assertLocalRunEnvironment(f.repo);
-  await mkdir(join(f.repo, ".sandcastle"));
-  const path = join(f.repo, ".sandcastle", ".env");
-  await writeFile(path, "# CODEX_API_KEY=comment\nGH_TOKEN=fixture\n");
-  await assertLocalRunEnvironment(f.repo);
-  await writeFile(path, "CODEX_API_KEY=\n");
-  await assert.rejects(assertLocalRunEnvironment(f.repo), /移除/u);
+  const cli = new URL("../src/cli.ts", import.meta.url);
+  const env = { ...process.env, CODEX_HOME: f.codexHome };
+  await writeFile(join(f.codexHome, "config.toml"), 'cli_auth_credentials_store = "file"\n');
+  execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname,
+    "init", "--model", "fixture-model", "--issue-tracker", "custom", "--template", "blank"], {
+    cwd: f.repo, stdio: "pipe", timeout: 30_000, env,
+  });
+  const mainPath = join(f.repo, ".sandcastle", "main.mts");
+  const generated = await readFile(mainPath, "utf8");
+  assert(generated.includes('agent: codex("fixture-model")'));
+  assert(generated.includes("sandbox: seatbelt()"));
+  assert(generated.includes('"@liumingjian/sandcastle-local/providers"'));
+  assert(!generated.includes(f.codexHome));
+  assert(!(await readFile(join(f.repo, ".sandcastle", ".env.example"), "utf8")).includes("CODEX_API_KEY="));
+  assert.throws(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname,
+    "init", "--issue-tracker", "custom", "--template", "blank"], { cwd: f.repo, stdio: "pipe", env }));
+  assert.equal(await readFile(mainPath, "utf8"), generated);
+  await writeFile(join(f.repo, ".sandcastle", "prompt.md"), "MAKE_COMMIT\n");
+  const packageScope = join(f.repo, "node_modules", "@liumingjian");
+  await mkdir(packageScope, { recursive: true });
+  await symlink(new URL("../", import.meta.url).pathname, join(packageScope, "sandcastle-local"));
+  const bin = join(f.root, "bin");
+  await mkdir(bin);
+  await copyFile(new URL("./fixtures/codex.mjs", import.meta.url), join(bin, "codex"));
+  await chmod(join(bin, "codex"), 0o755);
+  const git = (args: string[]) => execFileSync("git", args, { cwd: f.repo, encoding: "utf8", stdio: "pipe" }).trim();
+  const base = git(["rev-parse", "HEAD"]);
+  execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), mainPath], {
+    cwd: f.repo, stdio: "pipe", timeout: 30_000,
+    env: { ...env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+  });
+  assert.notEqual(git(["rev-parse", "HEAD"]), base);
+  assert.equal(git(["rev-parse", "HEAD^"]), base);
+  assert.equal(git(["branch", "--format=%(refname:short)"]), "main");
+  assert.equal(await readFile(join(f.repo, "agent-result.txt"), "utf8"), "local CLI fixture completed\n");
+});
+
+test("all templates and issue tracker scaffolds retain upstream content", { skip: process.platform !== "darwin", timeout: 120_000 }, async t => {
+  const f = await fixture(t);
+  const upstreamCli = new URL("../node_modules/@ai-hero/sandcastle/dist/main.js", import.meta.url);
+  const localCli = new URL("../src/cli.ts", import.meta.url);
+  const templates = await readdir(new URL("../node_modules/@ai-hero/sandcastle/dist/templates/", import.meta.url));
+  for (const template of templates) {
+    for (const tracker of ["custom", "github-issues", "beads"]) {
+      const label = `${template}-${tracker}`;
+      const upstreamDir = join(f.root, `${label}-upstream`);
+      const localDir = join(f.root, `${label}-local`);
+      await mkdir(upstreamDir);
+      await mkdir(localDir);
+      const flags = ["init", "--template", template, "--issue-tracker", tracker,
+        "--create-label", "false", "--install-template-deps", "false"];
+      execFileSync(process.execPath, [upstreamCli.pathname, ...flags, "--agent", "codex", "--sandbox", "seatbelt"], {
+        cwd: upstreamDir, stdio: "pipe", timeout: 15_000,
+      });
+      execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), localCli.pathname, ...flags], {
+        cwd: localDir, stdio: "pipe", timeout: 15_000, env: { ...process.env, CODEX_HOME: f.codexHome },
+      });
+      const files = await readdir(join(upstreamDir, ".sandcastle"));
+      assert.deepEqual(await readdir(join(localDir, ".sandcastle")), files, label);
+      for (const file of files) {
+        const normalize = (text: string) => text.replace(/"(?:@ai-hero\/sandcastle(?:\/sandboxes\/seatbelt)?|@liumingjian\/sandcastle-local\/providers)"/gu, '"AUTH_PROVIDER"');
+        let expected = await readFile(join(upstreamDir, ".sandcastle", file), "utf8");
+        let actual = await readFile(join(localDir, ".sandcastle", file), "utf8");
+        if (file === ".env.example") {
+          expected = expected.split("\n").slice(2).join("\n");
+          actual = actual.split("\n").slice(1).join("\n");
+        }
+        assert.equal(normalize(actual), normalize(expected), `${label}/${file}`);
+      }
+    }
+  }
+});
+
+test("adapter preserves provider options and upstream run controls", { skip: process.platform !== "darwin", timeout: 60_000 }, async t => {
+  const f = await fixture(t);
+  const bin = join(f.root, "bin");
+  await mkdir(bin);
+  await copyFile(new URL("./fixtures/codex.mjs", import.meta.url), join(bin, "codex"));
+  await chmod(join(bin, "codex"), 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${bin}:${originalPath ?? ""}`;
+  t.after(() => { if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath; });
+  const shared = join(f.root, "shared");
+  await mkdir(shared);
+  await writeFile(join(shared, "context.txt"), "mount-preserved");
+  const providerOptions = { effort: "low", env: { AGENT_CONTEXT: "agent-preserved" }, captureSessions: false, approvalsReviewer: "auto_review" } as const;
+  const adapted = await codexOnSeatbelt({
+    codexHome: f.codexHome, model: "explicit-model", ...providerOptions,
+    sandboxOptions: { env: { SANDBOX_CONTEXT: "sandbox-preserved" }, mounts: [{ hostPath: shared, sandboxPath: shared, readonly: true }], maxOutputTailChars: 4096 },
+  });
+  assert.equal(adapted.model, "explicit-model");
+  assert.equal(adapted.agent.captureSessions, false);
+  assert.deepEqual(adapted.agent.env, providerOptions.env);
+  const commandOptions = { prompt: "fixture", cwd: f.repo, dangerouslySkipPermissions: true };
+  assert.deepEqual(adapted.agent.buildPrintCommand(commandOptions), codex("explicit-model", providerOptions).buildPrintCommand(commandOptions));
+  const prompt = join(f.repo, "prompt.md");
+  await writeFile(prompt, "Context: !`printf '%s/%s/' \"$AGENT_CONTEXT\" \"$SANDBOX_CONTEXT\"; cat \"" + join(shared, "context.txt") + "\"`\n");
+  const result = await run({
+    cwd: f.repo, agent: adapted.agent, sandbox: adapted.sandbox,
+    promptFile: prompt, maxIterations: 2,
+    hooks: { sandbox: { onSandboxReady: [{ command: "printf hook-preserved > hook.txt" }] } },
+  });
+  assert.equal(result.iterations.length, 2);
+  assert.equal(result.branch, "main");
+  assert.equal(await readFile(join(f.repo, "hook.txt"), "utf8"), "hook-preserved");
+  assert(result.stdout.includes("agent-preserved/sandbox-preserved/mount-preserved"));
 });
 
 test("doctor verifies a sandboxed request, reports auth rejection and supports offline checks", { skip: process.platform !== "darwin", timeout: 60_000 }, async t => {

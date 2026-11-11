@@ -1,6 +1,6 @@
 {
   "name": "@liumingjian/sandcastle-local",
-  "version": "0.1.0",
+  "version": "0.14.0",
   "private": true,
   "description": "Reuse local Codex CLI authentication with Sandcastle and macOS Seatbelt",
   "type": "module",
@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers.d.ts",
+      "import": "./dist/providers.js"
     }
   },
   "files": [
@@ -22,8 +26,10 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "test:live": "tsx scripts/verify-live.ts",
-    "check": "npm run typecheck && npm test && npm run build",
-    "prepare": "npm run build"
+    "check": "npm run build && npm run typecheck && npm test",
+    "prepare": "npm run build",
+    "check:version": "node scripts/check-version.mjs",
+    "prebuild": "npm run check:version"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "0.14.0",

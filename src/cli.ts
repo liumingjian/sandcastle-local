@@ -1,44 +1,56 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { run } from "@ai-hero/sandcastle";
-import type { CodexOptions } from "@ai-hero/sandcastle";
-import { assertLocalRunEnvironment, codexOnSeatbelt, verifyCodexAuth } from "./index.js";
+import { codexOnSeatbelt, verifyCodexAuth } from "./index.js";
+import { initialize, upstreamInstallation } from "./init.js";
 
-const help = `sandcastle-local — macOS Seatbelt + 宿主 Codex CLI 登录
+const help = `sandcastle-local — 本机 Codex + Seatbelt
 
 用法:
+  sandcastle-local init [上游初始化选项]
   sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
-  sandcastle-local run --branch BRANCH (--prompt TEXT | --prompt-file PATH)
-    [--cwd PATH] [--model MODEL] [--effort high] [--codex-home PATH]
+  sandcastle-local --version
 
-运行结果留在指定分支，不自动合并。模型默认读取宿主 config.toml。
-复用整个 Codex 目录的读写权限，包括配置、登录和会话。
-doctor 默认在 Seatbelt 内发送一个最小模型请求验证授权，会消耗少量额度。
---offline 仅检查本地配置，不验证授权有效性。
+init 固定使用本机 Codex 和 Seatbelt，其余初始化与模板流程沿用上游。
+生成脚本自动复用本机登录，按上游说明执行，无需手动修改 provider。
+使用 init --help 查看初始化选项。
+doctor 默认发送最小模型请求验证登录；--offline 只检查本地配置。
 `;
 
-function effortOf(value: string | undefined): CodexOptions["effort"] {
-  switch (value) {
-    case undefined: case "low": case "medium": case "high": case "xhigh": return value;
-    default: throw new Error("effort 必须是 low、medium、high 或 xhigh（与上游 0.14.0 发布包一致）。");
-  }
-}
+const initHelp = `sandcastle-local init
+
+固定使用本机 Codex + Seatbelt；以下选项交由同版本上游处理：
+  --template NAME                 选择上游模板；省略时交互选择
+  --issue-tracker NAME            选择上游 issue tracker；省略时交互选择
+  --model MODEL                   指定模型；省略时使用上游 Codex 默认模型
+  --create-label true|false       是否创建 GitHub 标签
+  --install-template-deps true|false  是否安装模板依赖
+
+模板、issue tracker、提示词和运行方式均沿用上游。
+本机登录目录通过 CODEX_HOME 或 ~/.codex 选择。
+`;
 
 async function main() {
+  const args = process.argv.slice(2);
+  const upstream = await upstreamInstallation();
+  if (args.length === 1 && args[0] === "--version") {
+    process.stdout.write(upstream.version + "\n");
+    return;
+  }
+  if (args[0] === "init") {
+    if (args.includes("--help") || args.includes("-h")) {
+      process.stdout.write(initHelp);
+      return;
+    }
+    process.exitCode = await initialize(args.slice(1));
+    return;
+  }
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       help: { type: "boolean", short: "h" },
       offline: { type: "boolean" },
-      cwd: { type: "string" },
       model: { type: "string" },
-      effort: { type: "string" },
-      branch: { type: "string" },
-      prompt: { type: "string" },
-      "prompt-file": { type: "string" },
       "codex-home": { type: "string" },
     },
   });
@@ -46,58 +58,27 @@ async function main() {
     process.stdout.write(help);
     return;
   }
-  const command = positionals[0];
-  if (positionals.length !== 1 || (command !== "doctor" && command !== "run")) {
-    throw new Error("仅支持 doctor 和 run。使用 --help 查看用法。");
-  }
-  if (command === "run" && values.offline) throw new Error("--offline 仅适用于 doctor。");
-  const cwd = resolve(values.cwd ?? process.cwd());
-  const effort = effortOf(values.effort);
-  if (command === "run") {
-    if (!values.branch?.trim()) throw new Error("run 必须指定 --branch，避免直接修改当前工作目录。");
-    if ((values.prompt === undefined) === (values["prompt-file"] === undefined)) {
-      throw new Error("必须且只能指定 --prompt 或 --prompt-file。");
-    }
-    execFileSync("git", ["check-ref-format", "--branch", values.branch], { stdio: "ignore" });
-    execFileSync("git", ["rev-parse", "--verify", "HEAD"], { cwd, stdio: "ignore" });
-    await assertLocalRunEnvironment(cwd);
+  if (positionals.length !== 1 || positionals[0] !== "doctor") {
+    throw new Error("仅支持 init 和 doctor。任务执行请运行初始化生成的脚本。");
   }
   const adapted = await codexOnSeatbelt({
     ...(values.model === undefined ? {} : { model: values.model }),
     ...(values["codex-home"] === undefined ? {} : { codexHome: values["codex-home"] }),
-    ...(effort === undefined ? {} : { effort }),
   });
   try {
     execFileSync("codex", ["--version"], { stdio: "ignore" });
   } catch {
     throw new Error("宿主 PATH 中没有可运行的 codex CLI。请先安装并登录。");
   }
-  if (command === "doctor") {
-    if (!values.offline) process.stderr.write("正在 Seatbelt 内使用当前登录验证模型请求…\n");
-    const auth = values.offline
-      ? { status: "not_verified", message: "仅检查了本地文件，未验证授权有效性。" }
-      : await verifyCodexAuth(adapted, shutdown.signal);
-    process.stdout.write(JSON.stringify({
-      platform: "macOS", sandbox: "Seatbelt", codexHome: adapted.codexHome,
-      model: adapted.model, auth, sessions: "捕获已配置",
-    }, null, 2) + "\n");
-    if (auth.status === "failed") process.exitCode = 1;
-    return;
-  }
-  const prompt = values["prompt-file"] === undefined ? values.prompt
-    : await readFile(resolve(cwd, values["prompt-file"]), "utf8");
-  if (!prompt?.trim() || !values.branch) throw new Error("任务内容不能为空。");
-  const result = await run({
-    cwd, agent: adapted.agent, sandbox: adapted.sandbox,
-    branchStrategy: { type: "branch", branch: values.branch },
-    prompt, maxIterations: 1,
-    signal: AbortSignal.any([AbortSignal.timeout(30 * 60 * 1000), shutdown.signal]),
-  });
+  if (!values.offline) process.stderr.write("正在 Seatbelt 内使用当前登录验证模型请求…\n");
+  const auth = values.offline
+    ? { status: "not_verified", message: "仅检查了本地文件，未验证授权有效性。" }
+    : await verifyCodexAuth(adapted, shutdown.signal);
   process.stdout.write(JSON.stringify({
-    branch: result.branch, commits: result.commits,
-    sessions: result.iterations.map(iteration => iteration.sessionId),
-    logFilePath: result.logFilePath,
+    platform: "macOS", sandbox: "Seatbelt", codexHome: adapted.codexHome,
+    model: adapted.model, auth, sessions: "捕获已配置",
   }, null, 2) + "\n");
+  if (auth.status === "failed") process.exitCode = 1;
 }
 
 const shutdown = new AbortController();

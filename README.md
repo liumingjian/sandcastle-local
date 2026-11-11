@@ -1,125 +1,120 @@
 # sandcastle-local
 
-为本地 Codex CLI 添加 Sandcastle 的 macOS Seatbelt 编排，并复用宿主机已有的文件登录。适合将单个开发任务放进独立 Git 分支执行，再由你检查和合并。
+与 Sandcastle 使用相同的安装、初始化和模板执行流程，固定使用 **本机 Codex + macOS Seatbelt**，自动复用本机已有登录。其余 issue tracker、template、提示词、循环、审查、并行、分支和合并行为均沿用上游。
 
-这是一个独立适配层，通过 npm 使用上游包，不修改 `node_modules`。更新 Sandcastle 不会覆盖适配代码。
+**本包版本与所依赖的上游版本严格相同，目前均为 `0.14.0`。** 不使用独立版本号、版本范围或本地版本后缀。
 
-## 支持范围
+## 安装
 
-| 项目 | 首版支持 |
-| --- | --- |
-| 系统 | macOS 14+，与上游 Seatbelt 要求一致 |
-| 隔离 | 系统 `/usr/bin/sandbox-exec`，无需 Docker |
-| Agent | 宿主 PATH 中的 Codex CLI |
-| 授权 | 已有 `auth.json` 文件登录；无需额外提供 API key |
-| 执行方式 | 非交互任务、显式命名分支、会话捕获与恢复 |
-| 暂不支持 | Windows、WSL、Linux、Keychain-only 登录、交互终端、其他 agent |
+前提：macOS 14+、Node.js、npm、Git 和 Codex CLI；宿主终端已能正常使用 `codex`，登录保存在 `auth.json` 中。
 
-上游依赖精确固定为 `@ai-hero/sandcastle@0.14.0`。上游未声明统一的 Node `engines`，本项目也不额外声明不同的版本要求；开发与 CI 使用 Node 22/24，首次在本机验证使用 Node 24。
+直接在目标项目中从 GitHub 安装并初始化，无需手动 clone：
 
-## 快速开始
+```bash
+cd /path/to/your-project
+npm install --save-dev git+https://github.com/liumingjian/sandcastle-local.git
+npx sandcastle-local init
+```
 
-前提：安装 Node.js、npm、Git 和 Codex CLI，且宿主终端已经可以正常使用 `codex`。目标项目必须有至少一次 Git 提交。
+仓库公开提供，HTTPS 安装无需 GitHub 仓库授权。已配置 GitHub SSH key 时也可以使用：
+
+```bash
+npm install --save-dev git+ssh://git@github.com/liumingjian/sandcastle-local.git
+```
+
+npm 会自动获取仓库、安装构建依赖，并运行本包的 `prepare` 脚本构建。无需手动 clone、单独构建或另外安装上游包。参见 [npm Git 安装说明](https://docs.npmjs.com/cli/v11/using-npm/package-spec/#git-urls)和 [prepare 生命周期](https://docs.npmjs.com/cli/v11/using-npm/scripts/#life-cycle-scripts)。
+
+默认安装远端默认分支；固定某次发布可在 Git 地址后追加已存在的 `#tag` 或 `#commit`，并提交项目生成的 package-lock.json。发布 tag 的版本号应与本包及上游一致。
+
+## 初始化
+
+```bash
+npx sandcastle-local init
+```
+
+初始化器直接调用同版本上游 CLI，已固定 Codex 和 Seatbelt，因此跳过这两项选择。其余交互沿用上游，包括：
+
+- 选择 issue tracker：GitHub Issues、Beads 或 Custom。
+- 选择 template：blank、simple-loop、sequential-reviewer、parallel-planner 或 parallel-planner-with-review。
+- 按上游流程确认 GitHub 标签创建、模板依赖安装等操作。
+
+生成的 `.sandcastle/main.mts`（或 `.ts`）会自动接入本机登录。提示词、审查标准、tracker 配置和任务编排保留上游内容，不需要手动修改登录代码。`.env.example` 仅移除 Codex API key 要求；GitHub 等 tracker 的认证要求保持不变。
+
+非交互式初始化沿用上游参数，例如：
+
+```bash
+npx sandcastle-local init   --template simple-loop   --issue-tracker github-issues   --create-label false
+```
+
+需要 schema validator 的 planner 模板，在非交互模式下还需按上游要求指定 `--install-template-deps true` 或 `false`。`--model` 保留上游含义；省略时使用上游 Codex 默认模型。
+
+可使用 `npx sandcastle-local init --help` 查看选项。`--agent codex` 和 `--sandbox seatbelt` 可显式传入，其他 agent/sandbox 值会被拒绝。已有 `.sandcastle/` 时沿用上游拒绝重新初始化的行为，不覆盖现有脚本。
+
+## 执行任务
+
+按照初始化输出配置 tracker、提示词和项目脚本，然后执行，例如：
+
+```bash
+npx tsx .sandcastle/main.mts
+```
+
+若上游生成 `.sandcastle/main.ts`，使用对应文件名。也可按上游提示添加 package.json 的 `sandcastle` 脚本，再运行 `npm run sandcastle`。
+
+执行使用上游原生 API。本包只适配 Codex/Seatbelt provider 的登录目录和会话路径，不添加任务 `run` 命令，不决定分支、轮次、hook、超时、审查、并行或合并策略。Seatbelt 没有显式分支策略时，会按照上游默认行为直接在当前检出目录执行。
+
+## 登录检查
+
+```bash
+npx sandcastle-local doctor
+npx sandcastle-local doctor --offline
+npx sandcastle-local --version
+```
+
+`doctor` 默认在临时 Git 项目中通过 Seatbelt 发起一个最小模型请求验证登录，消耗少量当前账户额度，最长等待约两分钟；不会发送业务项目内容。`--offline` 只检查本地配置，不发送请求。
+
+```text
+sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
+```
+
+在线验证收到随机标记后返回 `auth.status: "verified"`；失败时返回非零退出码和分类错误，不打印原始服务端错误。成功只代表该次请求可用。doctor 的默认模型读取宿主配置，与初始化时的上游默认模型选择相互独立。
+
+## 登录适配边界
+
+- 登录目录按显式 `codexHome`（doctor 可用 `--codex-home`）、宿主 `CODEX_HOME`、`~/.codex` 的顺序选择。生成脚本在运行时解析当前用户的目录，不写入初始化机器的绝对路径。
+- 整个选定目录在 Seatbelt 内可读写，包括配置、凭证和会话。Codex 自己管理 token 刷新，无需复制凭证或额外回写。
+- 仅支持已有 `auth.json` 文件登录，`cli_auth_credentials_store` 为 `file` 或未设置。不自动迁移登录、不修改宿主配置、不额外注入 API key。
+- 保留上游 Codex 选项和 Seatbelt 的原有环境变量、挂载与输出配置。默认会话路径对齐至选定登录目录的 sessions；显式 sessionStorage 配置保留。
+- 上游私有 HOME、网络和 `.sandcastle/.env` 处理逻辑保持原样。不要在 agent env 中重复定义 CODEX_HOME；上游禁止 agent/sandbox provider 的 env 键重叠。
+- 不支持 Keychain-only 登录或其他系统；不可用时明确报错，不降级为无沙箱执行。
+
+## 版本与开发
+
+只有开发本仓库时才需要手动 clone：
 
 ```bash
 git clone git@github.com:liumingjian/sandcastle-local.git
 cd sandcastle-local
 npm ci
-node dist/cli.js doctor
 ```
-
-`doctor` 检查系统沙箱、CLI、文件登录和模型配置，并默认在临时 Git 项目中通过 Seatbelt 发起一个最小模型请求验证当前授权。它会消耗少量当前账户额度，最长等待约两分钟；不会向模型发送业务项目内容。
-
-只有收到随机验证标记才输出 `auth.status: "verified"`。在线验证失败时返回非零退出码，`auth.code` 区分认证拒绝、访问权限、限流/额度、模型不可用、网络错误、超时和响应异常；不会直接打印原始服务端错误。通过验证表示当前配置的登录、模型和连接在本次请求中可用，不保证后续请求不会过期或限流。
-
-仅检查本地配置、不发送请求时，运行 `node dist/cli.js doctor --offline`，此时明确输出 `auth.status: "not_verified"`。
-
-接着指定你自己的目标项目，先跑一个不改文件的任务：
 
 ```bash
-node dist/cli.js run \
-  --cwd /path/to/your-git-project \
-  --branch agent/local-first \
-  --prompt '只阅读 README 并概括项目用途，不修改文件，不运行外部服务。'
-```
-
-模型默认读取宿主 `config.toml` 的顶层 `model`，也可以显式传入 `--model`。成功后输出 branch、commits、sessions 和 logFilePath。需要修改代码时，在任务中明确验收命令与提交要求；`commits` 只收集 agent 实际创建的提交。
-
-结果留在指定分支，不自动合并到当前分支。检查日志和 diff，在目标分支/worktree 运行项目检查，再决定是否合并。`.sandcastle/worktrees/` 中的运行目录由上游管理；查看位置可使用 `git worktree list`。目标项目应将 `.sandcastle/` 加入 `.gitignore`。
-
-### 命令选项
-
-```text
-sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
-sandcastle-local run --branch BRANCH (--prompt TEXT | --prompt-file PATH)
-  [--cwd PATH] [--model MODEL] [--effort high] [--codex-home PATH]
-```
-
-`--prompt-file` 按目标项目目录解析，作为普通文本读取，不展开 Sandcastle 的 shell 模板语法。CLI 一次执行一轮，最多运行 30 分钟；Ctrl-C 会取消任务。`--effort` 支持 low、medium、high、xhigh，与上游 0.14.0 发布包保持一致。
-
-需要直接使用命令名时，可在本仓库执行 `npm link`。也可以在另一个项目中通过本地路径安装此包：
-
-```bash
-npm install --save-dev /absolute/path/to/sandcastle-local
-npx sandcastle-local doctor
-```
-
-## 在脚本中编排
-
-```ts
-import { run } from '@ai-hero/sandcastle';
-import { codexOnSeatbelt, assertLocalRunEnvironment } from '@liumingjian/sandcastle-local';
-
-const cwd = '/path/to/your-git-project';
-await assertLocalRunEnvironment(cwd);
-const { agent, sandbox } = await codexOnSeatbelt({ effort: 'high' });
-
-const result = await run({
-  cwd,
-  agent,
-  sandbox,
-  branchStrategy: { type: 'branch', branch: 'agent/my-task' },
-  prompt: '完成指定任务，运行项目检查并提交本次修改。',
-});
-```
-
-helper 返回上游原生的 agent/sandbox，可与 `run()`、`createSandbox()` 组合。**脚本调用者仍须显式选择分支策略**；CLI 则强制要求 `--branch`。并行任务必须使用不同分支；运行完成或 agent 报告完成，不等于项目验收已通过。
-
-## 登录和隔离边界
-
-- Codex 目录按 `codexHome` / `--codex-home`、宿主 `CODEX_HOME`、`~/.codex` 的顺序选择，并解析为真实路径。
-- 整个指定 Codex 目录在 Seatbelt 内可读写，包括配置、凭证和会话。Codex 自己保存 token 刷新结果，无需复制凭证或额外回写。
-- 沙箱仍使用私有 HOME，其他未开放的宿主目录继续受 Seatbelt 策略限制。该模式沿用上游开放网络的行为，包括宿主 localhost。
-- 首版接受未设置或设置为 `file` 的 `cli_auth_credentials_store`；其他存储模式会明确报错，不自动迁移授权或修改宿主配置。
-- `auth.json` 可以来自已有 ChatGPT 登录或已有 API 登录。本适配器不切换登录方式、不承诺具体订阅额度，不额外注入 API key。
-- CLI 拒绝目标项目 `.sandcastle/.env` 中的 `CODEX_API_KEY`、`OPENAI_API_KEY`、`CODEX_HOME`。脚本集成请调用 `assertLocalRunEnvironment(cwd)` 做同样检查。
-- 宿主 shell 的全部环境变量不会自动透传。若自定义 provider 还依赖其他环境变量，需按上游 `.sandcastle/.env` 机制显式配置。
-
-## 开发与升级
-
-```bash
-npm ci
 npm run check
 ```
 
-检查包括类型、真实 Seatbelt 文件访问边界、持久化写入，以及测试 CLI 下的提交、会话恢复和双分支并行，不消耗模型额度。非 macOS 环境只验证拒绝行为与通用检查，不能作为 Seatbelt 验收。
+构建和 CI 强制校验：本包 version、精确上游依赖、实际安装的上游版本，以及 lockfile 中的对应版本必须全部相同。CLI 启动时也检查版本匹配。
 
-如需使用自己的真实 CLI 和已有登录做两个最小请求：
-
-```bash
-npm run test:live
-```
-
-此命令会消耗当前 CLI 账户额度，在临时 Git 项目运行一次任务和一次 resume；不会修改业务项目。它会在已有 Codex 目录保存验证会话。
-
-升级依赖时显式选择新版本，并提交 lockfile：
+升级时一起更新本包版本和上游依赖，例如在本仓库执行：
 
 ```bash
-npm install --save-exact @ai-hero/sandcastle@<new-version>
+npm version NEW_VERSION --no-git-tag-version
+npm install --save-exact @ai-hero/sandcastle@NEW_VERSION
 npm run check
-npm run test:live
 ```
 
-新版本通过验证后再提交。升级不会覆盖本项目源码，但上游公开接口变化仍可能需要适配。
+将 `NEW_VERSION` 替换为同一个上游发布版本。通过模板兼容性验证后再发布同版本适配包。版本不会自动升级，也不宣称未经验证的新版本兼容。
 
-更多说明：[设计与批准范围](docs/design.md)、[验证记录](docs/verification.md)。
+检查包含全部模板与 tracker 组合的内容对比、初始化后直接运行、真实 Seatbelt 文件边界、登录持久化、迭代、提示词展开、hook 和会话恢复，不消耗模型额度。非 macOS 环境只验证通用检查和拒绝行为。
+
+需要真实本机 CLI 与登录验证请求和恢复时，运行 `npm run test:live`；此命令会消耗当前账户额度，并保存验证会话。
+
+更多说明：[设计范围](docs/design.md)、[验证记录](docs/verification.md)。

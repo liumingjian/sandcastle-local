@@ -5,15 +5,16 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { codex } from "@ai-hero/sandcastle";
 import type { CodexOptions } from "@ai-hero/sandcastle";
 import { seatbelt } from "@ai-hero/sandcastle/sandboxes/seatbelt";
+import type { SeatbeltOptions } from "@ai-hero/sandcastle/sandboxes/seatbelt";
 import { parse } from "smol-toml";
 
 export { verifyCodexAuth } from "./auth.js";
 export type { AuthVerification } from "./auth.js";
 
-export interface LocalCodexOptions {
+export interface LocalCodexOptions extends CodexOptions {
   readonly model?: string;
-  readonly effort?: CodexOptions["effort"];
   readonly codexHome?: string;
+  readonly sandboxOptions?: SeatbeltOptions;
 }
 
 async function readConfig(directory: string) {
@@ -37,7 +38,7 @@ function contains(parent: string, child: string) {
   return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
 }
 
-export async function resolveLocalCodex(options: LocalCodexOptions = {}) {
+async function resolveLocalProfile(options: { readonly codexHome?: string } = {}) {
   if (process.platform !== "darwin") {
     throw new Error("首版仅支持 macOS 14+ 的 Seatbelt；不支持 Windows、WSL 或 Linux。");
   }
@@ -67,11 +68,16 @@ export async function resolveLocalCodex(options: LocalCodexOptions = {}) {
   if (store !== undefined && store !== "file") {
     throw new Error("首版要求文件登录：cli_auth_credentials_store 应为 file 或未设置；不会自动修改宿主配置。");
   }
+  return { codexHome, config, sessionsDir: join(codexHome, "sessions") };
+}
+
+export async function resolveLocalCodex(options: LocalCodexOptions = {}) {
+  const { config, ...profile } = await resolveLocalProfile(options);
   const model = options.model ?? config.model;
   if (typeof model !== "string" || model.trim() === "") {
     throw new Error("请传入 model / --model，或在 Codex config.toml 中设置 model。");
   }
-  return { codexHome, model, sessionsDir: join(codexHome, "sessions") };
+  return { ...profile, model };
 }
 
 export type LocalCodexAdapter = Awaited<ReturnType<typeof resolveLocalCodex>> & {
@@ -79,33 +85,38 @@ export type LocalCodexAdapter = Awaited<ReturnType<typeof resolveLocalCodex>> & 
   readonly sandbox: ReturnType<typeof seatbelt>;
 };
 
-export async function codexOnSeatbelt(options: LocalCodexOptions = {}): Promise<LocalCodexAdapter> {
-  const resolved = await resolveLocalCodex(options);
-  const agent = codex(resolved.model, {
-    ...(options.effort === undefined ? {} : { effort: options.effort }),
-    sessionStorage: {
-      hostSessionsDir: resolved.sessionsDir,
-      sandboxSessionsDir: resolved.sessionsDir,
-    },
-  });
-  const sandbox = seatbelt({
-    env: { CODEX_HOME: resolved.codexHome },
-    mounts: [{ hostPath: resolved.codexHome, sandboxPath: resolved.codexHome, readonly: false }],
-  });
-  return { agent, sandbox, ...resolved };
+type LocalProviders = { readonly codex: typeof codex; readonly seatbelt: typeof seatbelt };
+
+function providersFor(profile: { codexHome: string; sessionsDir: string }): LocalProviders {
+  return {
+    codex: (model: string, options: CodexOptions = {}) => codex(model, {
+      ...options,
+      sessionStorage: {
+        hostSessionsDir: profile.sessionsDir,
+        sandboxSessionsDir: profile.sessionsDir,
+        ...options.sessionStorage,
+      },
+    }),
+    seatbelt: (options: SeatbeltOptions = {}) => seatbelt({
+      ...options,
+      env: { ...options.env, CODEX_HOME: profile.codexHome },
+      mounts: [
+        ...(options.mounts ?? []),
+        { hostPath: profile.codexHome, sandboxPath: profile.codexHome, readonly: false },
+      ],
+    }),
+  };
 }
 
-export async function assertLocalRunEnvironment(cwd: string) {
-  let contents: string;
-  try {
-    contents = await readFile(join(cwd, ".sandcastle", ".env"), "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
-    throw new Error("无法读取项目 .sandcastle/.env。");
-  }
-  for (const line of contents.split(/\r?\n/u)) {
-    if (/^\s*(CODEX_API_KEY|OPENAI_API_KEY|CODEX_HOME)\s*=/u.test(line)) {
-      throw new Error("请从项目 .sandcastle/.env 移除 CODEX_API_KEY、OPENAI_API_KEY 和 CODEX_HOME，避免覆盖宿主登录适配。");
-    }
-  }
+export async function localCodexProviders(options: { readonly codexHome?: string } = {}): Promise<LocalProviders> {
+  return providersFor(await resolveLocalProfile(options));
+}
+
+export async function codexOnSeatbelt(options: LocalCodexOptions = {}): Promise<LocalCodexAdapter> {
+  const resolved = await resolveLocalCodex(options);
+  const { model: _model, codexHome: _codexHome, sandboxOptions, ...agentOptions } = options;
+  const providers = providersFor(resolved);
+  const agent = providers.codex(resolved.model, agentOptions);
+  const sandbox = providers.seatbelt(sandboxOptions);
+  return { agent, sandbox, ...resolved };
 }
