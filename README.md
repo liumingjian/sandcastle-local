@@ -1,6 +1,6 @@
 # sandcastle-local
 
-与 Sandcastle 使用相同的安装、初始化和模板执行流程，固定使用 **本机 Codex + macOS Seatbelt**，自动复用本机已有登录。模型由用户选择；其余 issue tracker、template、提示词、循环、审查、并行、分支和合并行为均沿用上游。
+与 Sandcastle 使用相同的安装、初始化和模板执行流程，固定使用 **本机 Codex**，默认 **直接在宿主机上运行、不设任何权限限制**（可选 macOS Seatbelt），自动复用本机已有登录。模型由用户选择；其余 issue tracker、template、提示词、循环、审查、并行、分支和合并行为均沿用上游。
 
 **本包版本与所依赖的上游版本严格相同，目前均为 `0.14.0`。** 不使用独立版本号、版本范围或本地版本后缀。
 
@@ -32,7 +32,18 @@ npm 会自动获取仓库、安装构建依赖，并运行本包的 `prepare` �
 npx sandcastle-local init
 ```
 
-初始化器直接调用同版本上游 CLI，已固定 Codex 和 Seatbelt，因此跳过这两项选择。其余交互沿用上游，包括：
+初始化器直接调用同版本上游 CLI，已固定 Codex，因此跳过 agent 与 sandbox 选择。
+
+### 运行模式
+
+- `--sandbox host`（默认）：生成脚本使用 `host()`，agent 以当前用户的全部权限直接在宿主机运行，可使用 Docker、宿主 `gh` 登录、SSH key 和整个用户目录。agent 会把 issue 和评论当作指令执行；仓库公开时，任何能评论的人都能影响 agent 的行为。
+- `--sandbox seatbelt`：保留原有 Seatbelt 隔离，agent 只能写 worktree，Docker socket 等宿主资源不可用。
+
+### 本包对模板的加固
+
+- 生成入口会把主进程输出和最终报错写入 `.sandcastle/logs/entry.log`。
+- 审查提示词只内联 `git diff --stat`，由 agent 按文件读取 diff，跳过生成、压缩、lock 和二进制文件，避免超出上下文。
+- 实现提示词在遇到只能由人处理的阻塞时，改为交给人工（GitHub：`ready-for-agent` 换成 `ready-for-human`）并结束，不再空转到轮次上限；每次运行只编辑一条进度评论。合并提示词不会关闭已交给人工的 issue。其余交互沿用上游，包括：
 
 - 选择 issue tracker：GitHub Issues、Beads 或 Custom。
 - 选择 template：blank、simple-loop、sequential-reviewer、parallel-planner 或 parallel-planner-with-review。
@@ -48,7 +59,7 @@ npx sandcastle-local init   --template simple-loop   --issue-tracker github-issu
 
 需要 schema validator 的 planner 模板，在非交互模式下还需按上游要求指定 `--install-template-deps true` 或 `false`。`--model MODEL` 沿用上游含义；省略时保留上游模板默认模型，本包不强制指定模型。
 
-可使用 `npx sandcastle-local init --help` 查看选项。`--agent codex` 和 `--sandbox seatbelt` 可显式传入，其他 agent/sandbox 值会被拒绝。已有 `.sandcastle/` 时沿用上游拒绝重新初始化的行为，不覆盖现有脚本。
+可使用 `npx sandcastle-local init --help` 查看选项。`--agent codex` 和 `--sandbox host|seatbelt` 可显式传入，其他 agent/sandbox 值会被拒绝。已有 `.sandcastle/` 时沿用上游拒绝重新初始化的行为，不覆盖现有脚本。
 
 ### 手动选择 Codex 模型
 

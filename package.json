@@ -19,6 +19,10 @@
     "./providers": {
       "types": "./dist/providers.d.ts",
       "import": "./dist/providers.js"
+    },
+    "./run-log": {
+      "types": "./dist/run-log.d.ts",
+      "import": "./dist/run-log.js"
     }
   },
   "files": [

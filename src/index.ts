@@ -6,6 +6,8 @@ import { codex } from "@ai-hero/sandcastle";
 import type { CodexOptions } from "@ai-hero/sandcastle";
 import { seatbelt } from "@ai-hero/sandcastle/sandboxes/seatbelt";
 import type { SeatbeltOptions } from "@ai-hero/sandcastle/sandboxes/seatbelt";
+import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
+import type { NoSandboxOptions } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { parse } from "smol-toml";
 
 export { verifyCodexAuth } from "./auth.js";
@@ -85,7 +87,17 @@ export type LocalCodexAdapter = Awaited<ReturnType<typeof resolveLocalCodex>> & 
   readonly sandbox: ReturnType<typeof seatbelt>;
 };
 
-type LocalProviders = { readonly codex: typeof codex; readonly seatbelt: typeof seatbelt };
+type LocalProviders = {
+  readonly codex: typeof codex;
+  readonly seatbelt: typeof seatbelt;
+  /** Run agents directly on the host with the caller's full permissions. */
+  readonly host: typeof noSandbox;
+};
+
+function browserEnv(): Record<string, string> {
+  const endpoint = process.env.SANDCASTLE_BROWSER_ENDPOINT;
+  return endpoint ? { SANDCASTLE_BROWSER_ENDPOINT: endpoint } : {};
+}
 
 async function linkedSkillPaths(codexHome: string): Promise<string[]> {
   const visited = new Set<string>();
@@ -130,14 +142,17 @@ async function providersFor(profile: { codexHome: string; sessionsDir: string })
     seatbelt: (options: SeatbeltOptions = {}) => seatbelt({
       ...options,
       env: {
-        ...(process.env.SANDCASTLE_BROWSER_ENDPOINT ? { SANDCASTLE_BROWSER_ENDPOINT: process.env.SANDCASTLE_BROWSER_ENDPOINT } : {}),
-        ...options.env, CODEX_HOME: profile.codexHome,
+        ...browserEnv(), ...options.env, CODEX_HOME: profile.codexHome,
       },
       mounts: [
         ...(options.mounts ?? []),
         { hostPath: profile.codexHome, sandboxPath: profile.codexHome, readonly: false },
         ...skillMounts,
       ],
+    }),
+    host: (options: NoSandboxOptions = {}) => noSandbox({
+      ...options,
+      env: { ...browserEnv(), ...options.env, CODEX_HOME: profile.codexHome },
     }),
   };
 }
