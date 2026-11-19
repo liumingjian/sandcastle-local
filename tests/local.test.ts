@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { TestContext } from "node:test";
 import { codex, createSandbox, run } from "@ai-hero/sandcastle";
 import { codexOnSeatbelt, resolveLocalCodex, verifyCodexAuth } from "../src/index.js";
-import { browserPrelude, browserPrompt, configureBrowser } from "../src/init.js";
+import { blockedPrompt, browserPrelude, browserPrompt, configureBrowser, hardenPrompts, mergeBlockedPrompt, reviewDiff, runLogPrelude } from "../src/init.js";
 import { chromium } from "playwright-core";
 
 test("CLI exposes upstream-style initialization with fixed local providers and matching version", () => {
@@ -26,7 +26,7 @@ test("CLI exposes upstream-style initialization with fixed local providers and m
   for (const args of [["--agent", "claude-code"], ["--agent=pi"], ["--sandbox", "docker"], ["--sandbox=no-sandbox"]]) {
     assert.throws(() => execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "init", ...args], {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-    }), error => error instanceof Error && "stderr" in error && /固定为/u.test(String(error.stderr)));
+    }), error => error instanceof Error && "stderr" in error && /固定为|仅支持 host/u.test(String(error.stderr)));
   }
 });
 
@@ -130,7 +130,10 @@ test("initialized template executes without manual provider edits", { skip: proc
   const mainPath = join(f.repo, ".sandcastle", "main.mts");
   const generated = await readFile(mainPath, "utf8");
   assert(generated.includes('agent: codex("fixture-model")'));
-  assert(generated.includes("sandbox: seatbelt()"));
+  assert(generated.includes("sandbox: host()"));
+  assert(!/\bseatbelt\b/u.test(generated));
+  assert(generated.startsWith(browserPrelude + runLogPrelude));
+  assert.match(initialized, /不受任何沙箱限制/u);
   assert(generated.includes('"@liumingjian/sandcastle-local/providers"'));
   assert(!generated.includes(f.codexHome));
   // Exercise migration of a pre-bridge scaffold, then verify it is idempotent.
@@ -172,6 +175,33 @@ test("initialized template executes without manual provider edits", { skip: proc
   const { endpoint, wsEndpoint } = JSON.parse(await readFile(join(f.repo, "browser-result.json"), "utf8"));
   await assert.rejects(fetch(endpoint));
   await assert.rejects(chromium.connect(wsEndpoint, { timeout: 1000 }));
+  const runLog = await readFile(join(f.repo, ".sandcastle", "logs", "entry.log"), "utf8");
+  assert.match(runLog, /Entry started/u);
+  assert.match(runLog, /Entry exiting/u);
+});
+
+test("prompt hardening bounds review diffs, adds a human hand-off and is idempotent", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "sandcastle-local-prompts-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const review = "# CONTEXT\n\n!`git diff {{TARGET_BRANCH}}...{{BRANCH}}`\n\n!`git log {{TARGET_BRANCH}}..{{BRANCH}} --oneline`\n";
+  const prompts = {
+    "review-prompt.md": review,
+    "implement-prompt.md": "Once complete, output <promise>COMPLETE</promise>.\n",
+    "merge-prompt.md": "Merge.\n",
+    "plan-prompt.md": "Plan.\n",
+    "prompt.md": "No completion signal here.\n",
+  };
+  for (const [name, text] of Object.entries(prompts)) await writeFile(join(directory, name), text);
+  for (let index = 0; index < 2; index++) await hardenPrompts(directory);
+  const read = (name: string) => readFile(join(directory, name), "utf8");
+  const hardenedReview = await read("review-prompt.md");
+  assert(hardenedReview.includes(reviewDiff));
+  assert(!hardenedReview.includes("!`git diff {{TARGET_BRANCH}}...{{BRANCH}}`"));
+  assert(hardenedReview.includes("!`git log {{TARGET_BRANCH}}..{{BRANCH}} --oneline`"));
+  assert.equal(await read("implement-prompt.md"), prompts["implement-prompt.md"] + blockedPrompt);
+  assert.equal(await read("merge-prompt.md"), prompts["merge-prompt.md"] + mergeBlockedPrompt);
+  assert.equal(await read("plan-prompt.md"), prompts["plan-prompt.md"]);
+  assert.equal(await read("prompt.md"), prompts["prompt.md"]);
 });
 
 test("all templates and issue tracker scaffolds retain upstream content", { skip: process.platform !== "darwin", timeout: 120_000 }, async t => {
@@ -191,7 +221,7 @@ test("all templates and issue tracker scaffolds retain upstream content", { skip
       execFileSync(process.execPath, [upstreamCli.pathname, ...flags, "--agent", "codex", "--sandbox", "seatbelt"], {
         cwd: upstreamDir, stdio: "pipe", timeout: 15_000,
       });
-      execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), localCli.pathname, ...flags], {
+      execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), localCli.pathname, ...flags, "--sandbox", "seatbelt"], {
         cwd: localDir, stdio: "pipe", timeout: 15_000, env: { ...process.env, CODEX_HOME: f.codexHome },
       });
       const files = await readdir(join(upstreamDir, ".sandcastle"));
@@ -202,11 +232,15 @@ test("all templates and issue tracker scaffolds retain upstream content", { skip
         let expected = await readFile(join(upstreamDir, ".sandcastle", file), "utf8");
         let actual = await readFile(join(localDir, ".sandcastle", file), "utf8");
         if (/^main\.(mts|ts)$/u.test(file)) {
-          assert(actual.startsWith(browserPrelude));
-          actual = actual.slice(browserPrelude.length);
+          assert(actual.startsWith(browserPrelude + runLogPrelude));
+          actual = actual.slice(browserPrelude.length + runLogPrelude.length);
           actual = actual.replaceAll('[".sandcastle/BROWSER.md", ', "[");
         }
         if (file.endsWith("prompt.md")) {
+          for (const suffix of [blockedPrompt, mergeBlockedPrompt]) {
+            if (actual.endsWith(suffix)) actual = actual.slice(0, -suffix.length);
+          }
+          actual = actual.replace(reviewDiff, "!`git diff {{TARGET_BRANCH}}...{{BRANCH}}`");
           assert(actual.endsWith(browserPrompt));
           actual = actual.slice(0, -browserPrompt.length);
         }

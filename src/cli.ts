@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { codexOnSeatbelt, verifyCodexAuth } from "./index.js";
 import { configureBrowser, initialize, upstreamInstallation } from "./init.js";
 
-const help = `sandcastle-local — 本机 Codex + Seatbelt
+const help = `sandcastle-local — 本机 Codex，默认宿主机运行（无沙箱）
 
 用法:
   sandcastle-local init [上游初始化选项]
@@ -12,7 +12,7 @@ const help = `sandcastle-local — 本机 Codex + Seatbelt
   sandcastle-local doctor [--offline] [--codex-home PATH] [--model MODEL]
   sandcastle-local --version
 
-init 固定使用本机 Codex 和 Seatbelt，其余初始化与模板流程沿用上游。
+init 固定使用本机 Codex；默认 --sandbox host 不设任何限制，可选 --sandbox seatbelt。其余初始化与模板流程沿用上游。
 生成脚本自动复用本机登录，按上游说明执行，无需手动修改 provider。
 使用 init --help 查看初始化选项。
 doctor 默认发送最小模型请求验证登录；--offline 只检查本地配置。
@@ -21,7 +21,7 @@ setup-browser 为已有脚手架接入浏览器桥接，可重复执行。
 
 const initHelp = `sandcastle-local init
 
-固定使用本机 Codex + Seatbelt；以下选项交由同版本上游处理：
+固定使用本机 Codex；--sandbox host（默认，宿主机全权限）或 seatbelt。以下选项交由同版本上游处理：
   --template NAME                 选择上游模板；省略时交互选择
   --issue-tracker NAME            选择上游 issue tracker；省略时交互选择
   --model MODEL                   指定模板模型；省略时使用上游默认值
