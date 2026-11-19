@@ -3,6 +3,8 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { localCodexProviders } from "./index.js";
+import { replaceAnchored, resolveSandboxMode, useHostSandbox } from "./sandbox-mode.js";
+import type { SandboxMode } from "./sandbox-mode.js";
 
 export async function upstreamInstallation() {
   const root = dirname(dirname(fileURLToPath(import.meta.resolve("@ai-hero/sandcastle"))));
@@ -14,11 +16,9 @@ export async function upstreamInstallation() {
   return { version: upstream.version as string, cli: join(root, "dist", "main.js") };
 }
 
-export type SandboxMode = "host" | "seatbelt";
-
 function fixedProviderArgs(args: string[]) {
   const forwarded: string[] = [];
-  let mode: SandboxMode = "host";
+  let mode: SandboxMode | undefined;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     const key = arg.split("=", 1)[0];
@@ -29,7 +29,7 @@ function fixedProviderArgs(args: string[]) {
     const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : args[++index];
     if (key === "--agent" && value !== "codex") throw new Error("--agent 固定为 codex，仅支持本机 Codex。");
     if (key === "--sandbox") {
-      if (value !== "host" && value !== "seatbelt") throw new Error("--sandbox 仅支持 host（默认，不设限制）或 seatbelt。");
+      if (value !== "host" && value !== "seatbelt") throw new Error("--sandbox 仅支持 host 或 seatbelt。");
       mode = value;
     }
   }
@@ -38,7 +38,8 @@ function fixedProviderArgs(args: string[]) {
 }
 
 export async function initialize(args: string[], cwd = process.cwd()) {
-  const { forwarded, mode } = fixedProviderArgs(args);
+  const { forwarded, mode: requested } = fixedProviderArgs(args);
+  const mode = await resolveSandboxMode(requested);
   const upstream = await upstreamInstallation();
   await localCodexProviders();
   const result = spawnSync(process.execPath, [upstream.cli, "init", ...forwarded], { cwd, stdio: "inherit" });
@@ -49,10 +50,9 @@ export async function initialize(args: string[], cwd = process.cwd()) {
   if (!mainName) throw new Error("上游未生成预期的初始化脚本，无法接入本机登录。");
   const mainPath = join(directory, mainName);
   const original = await readFile(mainPath, "utf8");
-  let adapted = original.replace(/"@ai-hero\/sandcastle(?:\/sandboxes\/seatbelt)?"/gu,
-    '"@liumingjian/sandcastle-local/providers"');
-  if (adapted === original) throw new Error("上游模板的 provider 导入已变化，请先更新适配并验证。");
-  if (mode === "host") adapted = adapted.replace(/\bseatbelt\b/gu, "host");
+  let adapted = replaceAnchored(original, /"@ai-hero\/sandcastle(?:\/sandboxes\/seatbelt)?"/gu,
+    '"@liumingjian/sandcastle-local/providers"', " provider 导入");
+  if (mode === "host") adapted = useHostSandbox(adapted);
   await writeFile(mainPath, runLogPrelude + adapted);
   await configureBrowser(cwd);
   await hardenPrompts(directory);

@@ -7,6 +7,7 @@ import { test } from "node:test";
 import type { TestContext } from "node:test";
 import { codex, createSandbox, run } from "@ai-hero/sandcastle";
 import { codexOnSeatbelt, resolveLocalCodex, verifyCodexAuth } from "../src/index.js";
+import { replaceAnchored, resolveSandboxMode, useHostSandbox } from "../src/sandbox-mode.js";
 import { blockedPrompt, browserPrelude, browserPrompt, configureBrowser, hardenPrompts, mergeBlockedPrompt, reviewDiff, runLogPrelude } from "../src/init.js";
 import { chromium } from "playwright-core";
 
@@ -23,6 +24,9 @@ test("CLI exposes upstream-style initialization with fixed local providers and m
   assert.throws(() => execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "run"], {
     encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   }), error => error instanceof Error && "stderr" in error && /仅支持 init、doctor 和 setup-browser/u.test(String(error.stderr)));
+  assert.throws(() => execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "init", "--template", "blank"], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  }), error => error instanceof Error && "stderr" in error && /非交互模式需显式指定/u.test(String(error.stderr)));
   for (const args of [["--agent", "claude-code"], ["--agent=pi"], ["--sandbox", "docker"], ["--sandbox=no-sandbox"]]) {
     assert.throws(() => execFileSync(process.execPath, ["--import", "tsx", cli.pathname, "init", ...args], {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -122,7 +126,7 @@ test("initialized template executes without manual provider edits", { skip: proc
   const env = { ...process.env, CODEX_HOME: f.codexHome };
   await writeFile(join(f.codexHome, "config.toml"), 'cli_auth_credentials_store = "file"\n');
   const initialized = execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname,
-    "init", "--model", "fixture-model", "--issue-tracker", "custom", "--template", "blank"], {
+    "init", "--model", "fixture-model", "--issue-tracker", "custom", "--template", "blank", "--sandbox", "host"], {
     cwd: f.repo, stdio: "pipe", timeout: 30_000, env, encoding: "utf8",
   });
   assert.match(initialized, /首次提交/u);
@@ -146,7 +150,7 @@ test("initialized template executes without manual provider edits", { skip: proc
   }
   assert(!(await readFile(join(f.repo, ".sandcastle", ".env.example"), "utf8")).includes("CODEX_API_KEY="));
   assert.throws(() => execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli.pathname,
-    "init", "--issue-tracker", "custom", "--template", "blank"], { cwd: f.repo, stdio: "pipe", env }));
+    "init", "--issue-tracker", "custom", "--template", "blank", "--sandbox", "host"], { cwd: f.repo, stdio: "pipe", env }));
   assert.equal(await readFile(mainPath, "utf8"), generated);
   await writeFile(join(f.repo, ".sandcastle", "prompt.md"), "MAKE_COMMIT\nBROWSER_PROBE\n");
   // Install a real package: a symlink back to this checkout is outside Seatbelt.
@@ -178,6 +182,17 @@ test("initialized template executes without manual provider edits", { skip: proc
   const runLog = await readFile(join(f.repo, ".sandcastle", "logs", "entry.log"), "utf8");
   assert.match(runLog, /Entry started/u);
   assert.match(runLog, /Entry exiting/u);
+});
+
+test("sandbox mode is explicit, asked on a terminal, and host switching fails on unknown templates", async () => {
+  assert.equal(await resolveSandboxMode("seatbelt", { interactive: true, ask: async () => "host" }), "seatbelt");
+  assert.equal(await resolveSandboxMode(undefined, { interactive: true, ask: async () => "seatbelt" }), "seatbelt");
+  await assert.rejects(resolveSandboxMode(undefined, { interactive: false }), /非交互模式需显式指定/u);
+  const entry = 'import * as sandcastle from "@liumingjian/sandcastle-local/providers";\nimport { seatbelt } from "@liumingjian/sandcastle-local/providers";\nrun({ sandbox: seatbelt() });\nrun({ sandbox: seatbelt(sandboxOptions) });\n';
+  assert.equal(useHostSandbox(entry), entry.replace("{ seatbelt }", "{ host }").replaceAll("seatbelt(", "host("));
+  assert.throws(() => useHostSandbox(entry.replace("{ seatbelt }", "{ seatbelt as sb }")), /上游模板已变化/u);
+  assert.throws(() => useHostSandbox(entry + "const provider = seatbelt;\n"), /未识别的 seatbelt 引用/u);
+  assert.throws(() => replaceAnchored("text", /missing/u, "x", "锚点"), /缺少锚点/u);
 });
 
 test("prompt hardening bounds review diffs, adds a human hand-off and is idempotent", async t => {
@@ -224,6 +239,15 @@ test("all templates and issue tracker scaffolds retain upstream content", { skip
       execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), localCli.pathname, ...flags, "--sandbox", "seatbelt"], {
         cwd: localDir, stdio: "pipe", timeout: 15_000, env: { ...process.env, CODEX_HOME: f.codexHome },
       });
+      // Host mode must adapt every upstream template without tripping an anchor.
+      const hostDir = join(f.root, `${label}-host`);
+      await mkdir(hostDir);
+      execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), localCli.pathname, ...flags, "--sandbox", "host"], {
+        cwd: hostDir, stdio: "pipe", timeout: 15_000, env: { ...process.env, CODEX_HOME: f.codexHome },
+      });
+      const hostMain = await readFile(join(hostDir, ".sandcastle", "main.mts"), "utf8");
+      assert.match(hostMain, /sandbox: host\(/u, label);
+      assert(!/\bseatbelt\b/u.test(hostMain), label);
       const files = await readdir(join(upstreamDir, ".sandcastle"));
       assert.deepEqual(await readdir(join(localDir, ".sandcastle")), [...files, "BROWSER.md"].sort(), label);
       assert.match(await readFile(join(localDir, ".sandcastle", "BROWSER.md"), "utf8"), /connectBrowser/u);

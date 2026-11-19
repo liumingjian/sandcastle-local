@@ -1,6 +1,6 @@
 # sandcastle-local
 
-与 Sandcastle 使用相同的安装、初始化和模板执行流程，固定使用 **本机 Codex**，默认 **直接在宿主机上运行、不设任何权限限制**（可选 macOS Seatbelt），自动复用本机已有登录。模型由用户选择；其余 issue tracker、template、提示词、循环、审查、并行、分支和合并行为均沿用上游。
+与 Sandcastle 使用相同的安装、初始化和模板执行流程，固定使用 **本机 Codex**，初始化时选择 **宿主机运行（不设权限限制）** 或 **macOS Seatbelt 沙箱**，自动复用本机已有登录。模型由用户选择；其余 issue tracker、template、提示词、循环、审查、并行、分支和合并行为均沿用上游。
 
 **本包版本与所依赖的上游版本严格相同，目前均为 `0.14.0`。** 不使用独立版本号、版本范围或本地版本后缀。
 
@@ -32,11 +32,11 @@ npm 会自动获取仓库、安装构建依赖，并运行本包的 `prepare` �
 npx sandcastle-local init
 ```
 
-初始化器直接调用同版本上游 CLI，已固定 Codex，因此跳过 agent 与 sandbox 选择。
+初始化器直接调用同版本上游 CLI，已固定 Codex，因此跳过上游的 agent 与 sandbox 选择，改为选择下面的运行方式：交互式终端中会询问；非交互模式（CI、脚本、管道）必须显式传入 `--sandbox host` 或 `--sandbox seatbelt`，否则初始化直接失败，不做默认选择。
 
 ### 运行模式
 
-- `--sandbox host`（默认）：生成脚本使用 `host()`，agent 以当前用户的全部权限直接在宿主机运行，可使用 Docker、宿主 `gh` 登录、SSH key 和整个用户目录。agent 会把 issue 和评论当作指令执行；仓库公开时，任何能评论的人都能影响 agent 的行为。
+- `--sandbox host`：生成脚本使用 `host()`，agent 以当前用户的全部权限直接在宿主机运行，可使用 Docker、宿主 `gh` 登录、SSH key 和整个用户目录。agent 会把 issue 和评论当作指令执行；仓库公开时，任何能评论的人都能影响 agent 的行为。
 - `--sandbox seatbelt`：保留原有 Seatbelt 隔离，agent 只能写 worktree，Docker socket 等宿主资源不可用。
 
 ### 本包对模板的加固
@@ -54,7 +54,7 @@ npx sandcastle-local init
 非交互式初始化沿用上游参数，例如：
 
 ```bash
-npx sandcastle-local init   --template simple-loop   --issue-tracker github-issues   --create-label false
+npx sandcastle-local init   --sandbox seatbelt   --template simple-loop   --issue-tracker github-issues   --create-label false
 ```
 
 需要 schema validator 的 planner 模板，在非交互模式下还需按上游要求指定 `--install-template-deps true` 或 `false`。`--model MODEL` 沿用上游含义；省略时保留上游模板默认模型，本包不强制指定模型。

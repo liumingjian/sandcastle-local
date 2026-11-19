@@ -43,6 +43,17 @@ The local CLI also retains `doctor`, an authentication diagnostic previously req
 - Login reuse does not guarantee account quotas, model access, task correctness, or safe concurrent token refresh.
 - Branch behavior is entirely upstream-controlled. Seatbelt with no explicit strategy uses the current checkout; a template may explicitly choose another strategy.
 
+## Extending upstream
+
+Upstream offers no host choice at init: its scaffold list holds only sandboxed providers, and its no-sandbox provider is meant for `interactive()` with a person approving each action, while `run()` always passes Codex `--dangerously-bypass-approvals-and-sandbox`. Unattended loops on the host are therefore a local extension, added under the user's explicit request. Every local extension follows the same rules so upstream releases stay adoptable:
+
+- **Public API only.** Runtime extensions wrap exported providers (`host()` wraps `noSandbox()`); nothing reaches into upstream internals, transitive dependencies or node_modules.
+- **Scaffold as upstream, then post-process.** Init forwards a choice upstream supports (`--sandbox seatbelt`) and adapts the generated files afterwards.
+- **Anchored transforms fail loudly.** Each rewrite of an upstream file names the exact anchor it expects (`replaceAnchored`); a missing anchor or a leftover reference aborts init with "上游模板已变化" instead of emitting a half-adapted script. Appended content carries an HTML marker so reruns are idempotent.
+- **The template matrix is the upgrade gate.** The parity test scaffolds every upstream template × issue tracker in each sandbox mode and diffs against upstream after stripping the local additions. Bumping the pinned upstream version means running that test; any failure points at the transform to update.
+
+The sandbox mode is never guessed: a terminal asks, and non-interactive init requires `--sandbox host|seatbelt`.
+
 ## Validation
 
 Tests use a synthetic Codex directory and fixture CLI inside real Seatbelt. They cover login visibility and refresh persistence, unrelated-home denial, provider option preservation, all five upstream templates across all three issue trackers, automatic initialization/template execution, prompt expansion, multiple iterations, hooks, named branches, session resume, and concurrent upstream tasks. See [verification.md](verification.md) for executed results and historical records.
