@@ -42,6 +42,7 @@ npx sandcastle-local init
 ### 本包对模板的加固
 
 - 生成入口会把主进程输出和最终报错写入 `.sandcastle/logs/entry.log`。
+- GitHub Issues 模板用 `ready-for-agent` 筛选待处理工单。初始化保留上游的 `--create-label` 选项，生成后将 `--label Sandcastle` 替换为 `--label ready-for-agent`，或在上游省略筛选时补上 `--label ready-for-agent`。仓库已有 `ready-for-agent` 标签时，可用 `--create-label false` 跳过创建 `Sandcastle` 标签。
 - 审查提示词只内联 `git diff --stat`，由 agent 按文件读取 diff，跳过生成、压缩、lock 和二进制文件，避免超出上下文。
 - 实现提示词在遇到只能由人处理的阻塞时，改为交给人工（GitHub：`ready-for-agent` 换成 `ready-for-human`）并结束，不再空转到轮次上限；每次运行只编辑一条进度评论。合并提示词不会关闭已交给人工的 issue。其余交互沿用上游，包括：
 
@@ -49,7 +50,7 @@ npx sandcastle-local init
 - 选择 template：blank、simple-loop、sequential-reviewer、parallel-planner 或 parallel-planner-with-review。
 - 按上游流程确认 GitHub 标签创建、模板依赖安装等操作。
 
-生成的 `.sandcastle/main.mts`（或 `.ts`）会自动接入本机登录和按需启动的宿主浏览器桥接。提示词保留上游内容，并追加 `.sandcastle/BROWSER.md` 的浏览器使用指引。审查标准、tracker 配置和任务编排沿用上游。`.env.example` 仅移除 Codex API key 要求；GitHub 等 tracker 的认证要求保持不变。
+生成的 `.sandcastle/main.mts`（或 `.ts`）会自动接入本机登录和按需启动的宿主浏览器桥接。提示词追加了 `.sandcastle/BROWSER.md` 的浏览器使用指引。审查标准和任务编排沿用上游。`.env.example` 仅移除 Codex API key 要求；GitHub 等 tracker 的认证要求保持不变。
 
 非交互式初始化沿用上游参数，例如：
 
