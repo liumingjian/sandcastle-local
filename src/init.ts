@@ -163,6 +163,7 @@ Leave open any issue that was handed to a human (for GitHub: labelled \`ready-fo
 `;
 
 const fullDiff = "!`git diff {{TARGET_BRANCH}}...{{BRANCH}}`";
+const githubIssueList = /(!`gh issue list --state open)(?: --label Sandcastle)?(?= --limit 100 --json )/gu;
 export const reviewDiff = `!\`git diff --stat {{TARGET_BRANCH}}...{{BRANCH}}\`
 
 Read each changed file's diff with \`git diff {{TARGET_BRANCH}}...{{BRANCH}} -- <path>\`. Skip generated, minified, lock and binary files; they make the review exceed the context window.`;
@@ -173,7 +174,7 @@ export async function hardenPrompts(directory: string) {
     if (!name.endsWith("prompt.md")) continue;
     const path = join(directory, name);
     const prompt = await readFile(path, "utf8");
-    let adapted = prompt.replace(fullDiff, reviewDiff);
+    let adapted = prompt.replace(githubIssueList, "$1 --label ready-for-agent").replace(fullDiff, reviewDiff);
     if (!adapted.includes("<!-- sandcastle-local blocked -->")) {
       if (name === "implement-prompt.md" || (name === "prompt.md" && adapted.includes("<promise>COMPLETE</promise>"))) adapted += blockedPrompt;
       if (name === "merge-prompt.md") adapted += mergeBlockedPrompt;

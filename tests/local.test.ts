@@ -224,26 +224,30 @@ test("all templates and issue tracker scaffolds retain upstream content", { skip
   const upstreamCli = new URL("../node_modules/@ai-hero/sandcastle/dist/main.js", import.meta.url);
   const localCli = new URL("../src/cli.ts", import.meta.url);
   const templates = await readdir(new URL("../node_modules/@ai-hero/sandcastle/dist/templates/", import.meta.url));
+  const bin = join(f.root, "bin");
+  await mkdir(bin);
+  await writeFile(join(bin, "gh"), '#!/bin/sh\ntest "$1 $2 $3" = "label create Sandcastle"\n', { mode: 0o755 });
+  const env = { ...process.env, CODEX_HOME: f.codexHome, PATH: `${bin}:${process.env.PATH ?? ""}` };
   for (const template of templates) {
-    for (const tracker of ["custom", "github-issues", "beads"]) {
-      const label = `${template}-${tracker}`;
+    for (const [tracker, createLabel] of [["custom", false], ["github-issues", false], ["github-issues", true], ["beads", false]] as const) {
+      const label = `${template}-${tracker}-${createLabel}`;
       const upstreamDir = join(f.root, `${label}-upstream`);
       const localDir = join(f.root, `${label}-local`);
       await mkdir(upstreamDir);
       await mkdir(localDir);
       const flags = ["init", "--template", template, "--issue-tracker", tracker,
-        "--create-label", "false", "--install-template-deps", "false"];
+        "--create-label", String(createLabel), "--install-template-deps", "false"];
       execFileSync(process.execPath, [upstreamCli.pathname, ...flags, "--agent", "codex", "--sandbox", "seatbelt"], {
-        cwd: upstreamDir, stdio: "pipe", timeout: 15_000,
+        cwd: upstreamDir, stdio: "pipe", timeout: 15_000, env,
       });
       execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), localCli.pathname, ...flags, "--sandbox", "seatbelt"], {
-        cwd: localDir, stdio: "pipe", timeout: 15_000, env: { ...process.env, CODEX_HOME: f.codexHome },
+        cwd: localDir, stdio: "pipe", timeout: 15_000, env,
       });
       // Host mode must adapt every upstream template without tripping an anchor.
       const hostDir = join(f.root, `${label}-host`);
       await mkdir(hostDir);
       execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), localCli.pathname, ...flags, "--sandbox", "host"], {
-        cwd: hostDir, stdio: "pipe", timeout: 15_000, env: { ...process.env, CODEX_HOME: f.codexHome },
+        cwd: hostDir, stdio: "pipe", timeout: 15_000, env,
       });
       const hostMain = await readFile(join(hostDir, ".sandcastle", "main.mts"), "utf8");
       assert.match(hostMain, /sandbox: host\(/u, label);
@@ -261,6 +265,12 @@ test("all templates and issue tracker scaffolds retain upstream content", { skip
           actual = actual.replaceAll('[".sandcastle/BROWSER.md", ', "[");
         }
         if (file.endsWith("prompt.md")) {
+          assert.equal(await readFile(join(hostDir, ".sandcastle", file), "utf8"), actual, `${label}/${file}`);
+          if (tracker === "github-issues") {
+            const upstreamFilter = createLabel ? " --label Sandcastle" : "";
+            expected = expected.replaceAll(`gh issue list --state open${upstreamFilter} --limit`,
+              "gh issue list --state open --label ready-for-agent --limit");
+          }
           for (const suffix of [blockedPrompt, mergeBlockedPrompt]) {
             if (actual.endsWith(suffix)) actual = actual.slice(0, -suffix.length);
           }
